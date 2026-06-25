@@ -92,6 +92,7 @@ const enemies = [];
 const enemiesById = new Map();
 const pickups = [];
 const sparks = [];
+const bloodDrops = [];
 const embers = [];
 const decals = [];
 const ragdolls = [];
@@ -171,9 +172,13 @@ const input = {
 const materials = {};
 const geometries = {};
 const sparkMaterials = new Map();
+const bloodMaterials = new Map();
 const sparkPool = [];
+const bloodPool = [];
 const spawnQueue = [];
 const MAX_SPARK_POOL = 220;
+const MAX_BLOOD_POOL = 180;
+const MAX_BLOOD_DROPS = 160;
 const MAX_RAGDOLL_PARTS = 120;
 const SPAWN_DRIP_DELAY = 0.14;
 const ENEMY_EMERGE_TIME = 0.65;
@@ -191,7 +196,9 @@ window.ironCitadelDebug = {
   network,
   weapons: WEAPONS,
   enemies,
+  bloodDrops,
   ragdolls,
+  camera,
   controls,
   isEnemyHost
 };
@@ -356,6 +363,8 @@ function initAssets() {
   geometries.pickup = new THREE.DodecahedronGeometry(0.54, 0);
   geometries.jumpPad = new THREE.CylinderGeometry(1.8, 2.25, 0.34, 6);
   geometries.spark = new THREE.SphereGeometry(1, 6, 4);
+  geometries.bloodDrop = new THREE.DodecahedronGeometry(1, 0);
+  geometries.bloodSplat = new THREE.CircleGeometry(1, 12);
   geometries.scorch = new THREE.CircleGeometry(1, 16);
   geometries.weaponPickupCore = new THREE.BoxGeometry(0.82, 0.22, 0.42);
   geometries.weaponPickupBarrel = new THREE.CylinderGeometry(0.07, 0.11, 0.9, 8);
@@ -363,6 +372,9 @@ function initAssets() {
 
   for (let i = 0; i < MAX_SPARK_POOL; i += 1) {
     sparkPool.push(new THREE.Mesh(geometries.spark, sparkMaterial(0xff5a1d)));
+  }
+  for (let i = 0; i < MAX_BLOOD_POOL; i += 1) {
+    bloodPool.push(new THREE.Mesh(geometries.bloodDrop, bloodMaterial(0x7b0804)));
   }
 }
 
@@ -1184,6 +1196,7 @@ function resetRoomGame(seed) {
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
   sparks.splice(0).forEach((spark) => releaseSpark(spark.mesh));
+  bloodDrops.splice(0).forEach((drop) => releaseBloodDrop(drop.mesh));
   clearRagdolls();
   decals.splice(0).forEach((decal) => {
     scene.remove(decal.mesh);
@@ -1491,6 +1504,7 @@ function runConsoleCommand(rawCommand) {
     enemiesById.clear();
     enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
     clearRagdolls();
+    bloodDrops.splice(0).forEach((drop) => releaseBloodDrop(drop.mesh));
     spawnWave();
     logConsole(`wave ${wave} spawned`, "ok");
     return;
@@ -1570,6 +1584,7 @@ function restart() {
   enemiesById.clear();
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   clearRagdolls();
+  bloodDrops.splice(0).forEach((drop) => releaseBloodDrop(drop.mesh));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
@@ -2162,6 +2177,7 @@ function updateProjectiles(delta) {
       if (dist < radius + 0.65 && dy < 2.6) {
         enemy.health -= shot.damage;
         spawnMuzzleSparks(shot.mesh.position, shot.velocity.clone().normalize(), shot.shield ? 26 : 14, shot.shield ? 0xf3d193 : 0x5fffe0);
+        spawnBloodHit(shot.mesh.position, shot.velocity.clone().normalize(), enemy.type, shot.damage);
         flashHit();
         if (enemy.health <= 0) {
           killEnemy(enemy, e);
@@ -2259,6 +2275,30 @@ function updateEffects(delta) {
     if (spark.life <= 0) {
       releaseSpark(spark.mesh);
       sparks.splice(i, 1);
+    }
+  }
+
+  for (let i = bloodDrops.length - 1; i >= 0; i -= 1) {
+    const drop = bloodDrops[i];
+    drop.life -= delta;
+    drop.mesh.position.addScaledVector(drop.velocity, delta);
+    drop.velocity.y -= 15 * delta;
+    drop.mesh.rotation.x += drop.spin.x * delta;
+    drop.mesh.rotation.y += drop.spin.y * delta;
+    drop.mesh.rotation.z += drop.spin.z * delta;
+    const fade = Math.max(0, drop.life / drop.maxLife);
+    drop.mesh.scale.setScalar(drop.size * (0.65 + fade * 0.35));
+
+    if (drop.mesh.position.y <= 0.08) {
+      makeBloodSplat(drop.mesh.position, drop.color, drop.size * (2.2 + Math.random() * 1.7));
+      releaseBloodDrop(drop.mesh);
+      bloodDrops.splice(i, 1);
+      continue;
+    }
+
+    if (drop.life <= 0) {
+      releaseBloodDrop(drop.mesh);
+      bloodDrops.splice(i, 1);
     }
   }
 
@@ -2477,6 +2517,7 @@ function explodeProjectile(shot) {
     if (distance <= shot.blastRadius) {
       const falloff = 1 - distance / shot.blastRadius;
       enemy.health -= shot.damage * (0.35 + falloff * 0.85);
+      spawnBloodHit(enemy.group.position.clone().setY(1.45), enemy.group.position.clone().sub(origin).normalize(), enemy.type, shot.damage * falloff);
       if (enemy.health <= 0) killEnemy(enemy, e);
     }
   }
@@ -2536,6 +2577,29 @@ function makeScorch(position, color) {
   decals.push({ mesh, ttl: 7 });
 }
 
+function enemyBloodColor(type) {
+  if (type === "wraith" || type === "crawler") return 0x159e83;
+  if (type === "sentinel") return 0xb34a1d;
+  if (type === "imp" || type === "brute") return 0x9a0905;
+  return 0x6f0704;
+}
+
+function makeBloodSplat(position, color, scale = 0.5) {
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.46,
+    depthWrite: false
+  });
+  const mesh = new THREE.Mesh(geometries.bloodSplat, material);
+  mesh.scale.set(scale * (0.7 + Math.random() * 0.75), scale * (0.38 + Math.random() * 0.44), 1);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.rotation.z = Math.random() * Math.PI;
+  mesh.position.copy(position).setY(0.042 + Math.random() * 0.006);
+  scene.add(mesh);
+  decals.push({ mesh, ttl: 8.5 + Math.random() * 2.5 });
+}
+
 function sparkMaterial(color) {
   const key = new THREE.Color(color).getHex();
   if (!sparkMaterials.has(key)) {
@@ -2551,9 +2615,33 @@ function sparkMaterial(color) {
   return sparkMaterials.get(key);
 }
 
+function bloodMaterial(color) {
+  const key = new THREE.Color(color).getHex();
+  if (!bloodMaterials.has(key)) {
+    bloodMaterials.set(
+      key,
+      new THREE.MeshBasicMaterial({
+        color: key,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false
+      })
+    );
+  }
+  return bloodMaterials.get(key);
+}
+
 function takeSpark(color) {
   const mesh = sparkPool.pop() ?? new THREE.Mesh(geometries.spark, sparkMaterial(color));
   mesh.material = sparkMaterial(color);
+  mesh.visible = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+function takeBloodDrop(color) {
+  const mesh = bloodPool.pop() ?? new THREE.Mesh(geometries.bloodDrop, bloodMaterial(color));
+  mesh.material = bloodMaterial(color);
   mesh.visible = true;
   scene.add(mesh);
   return mesh;
@@ -2563,6 +2651,12 @@ function releaseSpark(mesh) {
   scene.remove(mesh);
   mesh.visible = false;
   if (sparkPool.length < MAX_SPARK_POOL) sparkPool.push(mesh);
+}
+
+function releaseBloodDrop(mesh) {
+  scene.remove(mesh);
+  mesh.visible = false;
+  if (bloodPool.length < MAX_BLOOD_POOL) bloodPool.push(mesh);
 }
 
 function spawnMuzzleSparks(origin, direction, count, color) {
@@ -2578,6 +2672,49 @@ function spawnMuzzleSparks(origin, direction, count, color) {
     );
     const velocity = direction.clone().multiplyScalar(2 + Math.random() * 7).add(side);
     sparks.push({ mesh, velocity, life: 0.25 + Math.random() * 0.42, maxLife: 0.68, size });
+  }
+}
+
+function spawnBloodHit(origin, direction, type, damage = 25) {
+  const color = enemyBloodColor(type);
+  const baseDir = direction.clone();
+  if (baseDir.lengthSq() < 0.001) baseDir.set(Math.random() - 0.5, 0.25, Math.random() - 0.5);
+  baseDir.normalize();
+  const count = Math.min(28, 8 + Math.ceil(damage / 6));
+  makeBloodSplat(origin, color, 0.28 + Math.min(damage, 90) * 0.006);
+
+  for (let i = 0; i < count; i += 1) {
+    while (bloodDrops.length >= MAX_BLOOD_DROPS) {
+      const oldest = bloodDrops.shift();
+      if (oldest) releaseBloodDrop(oldest.mesh);
+    }
+    const size = 0.035 + Math.random() * 0.075;
+    const mesh = takeBloodDrop(color);
+    mesh.scale.setScalar(size);
+    mesh.position.copy(origin).add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.18,
+      (Math.random() - 0.35) * 0.16,
+      (Math.random() - 0.5) * 0.18
+    ));
+    const spray = new THREE.Vector3(
+      (Math.random() - 0.5) * 4.2,
+      1.4 + Math.random() * 5.8,
+      (Math.random() - 0.5) * 4.2
+    );
+    const velocity = baseDir.clone().multiplyScalar(1.8 + Math.random() * 5.5).add(spray);
+    bloodDrops.push({
+      mesh,
+      color,
+      velocity,
+      spin: new THREE.Vector3(
+        (Math.random() - 0.5) * 14,
+        (Math.random() - 0.5) * 16,
+        (Math.random() - 0.5) * 14
+      ),
+      life: 0.55 + Math.random() * 0.55,
+      maxLife: 1.1,
+      size
+    });
   }
 }
 
