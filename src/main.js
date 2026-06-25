@@ -80,6 +80,7 @@ const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
 const flatForward = new THREE.Vector3();
 const tmpVec = new THREE.Vector3();
+const targetTmp = new THREE.Vector3();
 const aimPoint = new THREE.Vector3();
 const worldUp = new THREE.Vector3(0, 1, 0);
 const WEAPON_BASE_POSITION = new THREE.Vector3(0.12, -0.34, -0.56);
@@ -88,6 +89,7 @@ const keys = new Set();
 const projectiles = [];
 const enemyBolts = [];
 const enemies = [];
+const enemiesById = new Map();
 const pickups = [];
 const sparks = [];
 const embers = [];
@@ -139,16 +141,19 @@ const network = {
   id: null,
   roomId: null,
   roomName: "",
+  hostId: null,
   playerName: "Slayer",
   seed: 1,
   rooms: [],
   peers: new Map(),
   connected: false,
   lastSend: 0,
+  lastEnemySend: 0,
   statusEl: null
 };
 
 let gameSeed = 1;
+let nextEnemyId = 1;
 
 const input = {
   x: 0,
@@ -175,7 +180,6 @@ let spawnDripTimer = 0;
 
 initAssets();
 buildWorld();
-spawnWave();
 bindEvents();
 initNetwork();
 animate();
@@ -183,7 +187,10 @@ animate();
 window.ironCitadelDebug = {
   state,
   network,
-  weapons: WEAPONS
+  weapons: WEAPONS,
+  enemies,
+  controls,
+  isEnemyHost
 };
 
 function initAssets() {
@@ -903,6 +910,7 @@ function initNetwork() {
     network.connected = false;
     network.roomId = null;
     network.roomName = "";
+    network.hostId = null;
     network.statusEl.textContent = "NET OFFLINE";
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
@@ -933,6 +941,7 @@ function handleNetworkMessage(message) {
   if (message.type === "room-joined") {
     network.roomId = message.room?.id ?? null;
     network.roomName = message.room?.name ?? "";
+    network.hostId = message.room?.hostId ?? network.id;
     network.playerName = message.playerName ?? getPlayerName();
     playerNameInput.value = network.playerName;
     network.seed = message.room?.seed ?? 1;
@@ -947,6 +956,7 @@ function handleNetworkMessage(message) {
   if (message.type === "room-left") {
     network.roomId = null;
     network.roomName = "";
+    network.hostId = null;
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
     updateRoomStatus();
@@ -955,6 +965,11 @@ function handleNetworkMessage(message) {
   }
   if (message.type === "room-error") {
     roomStatus.textContent = message.message ?? "Room error";
+    return;
+  }
+  if (message.type === "host-changed") {
+    network.hostId = message.hostId ?? network.hostId;
+    network.statusEl.textContent = isEnemyHost() ? "NET HOST" : `HOST P${network.hostId}`;
     return;
   }
   if (!message.id || message.id === network.id) return;
@@ -981,12 +996,16 @@ function handleNetworkMessage(message) {
     }
     peer.playerName = message.playerName || peer.playerName || `P${message.id}`;
     peer.targetPosition.set(message.x ?? 0, (message.y ?? PLAYER_HEIGHT) - PLAYER_HEIGHT, message.z ?? 0);
-    peer.targetRotation = message.ry ?? 0;
+    peer.targetRotation = (message.ry ?? 0) + Math.PI;
     peer.weaponIndex = message.weaponIndex ?? 0;
     return;
   }
   if (message.type === "fire") {
     spawnRemoteShot(message);
+    return;
+  }
+  if (message.type === "enemy-state") {
+    applyEnemyState(message);
   }
 }
 
@@ -1078,6 +1097,15 @@ function setGameSeed(seed) {
   gameSeed = Math.max(1, Number(seed) || 1) >>> 0;
 }
 
+function isEnemyHost() {
+  return !network.roomId || network.hostId === network.id;
+}
+
+function dampAngle(current, target, lambda, delta) {
+  const diff = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+  return current + diff * (1 - Math.exp(-lambda * delta));
+}
+
 function gameRandom() {
   gameSeed = (gameSeed * 1664525 + 1013904223) >>> 0;
   return gameSeed / 4294967296;
@@ -1097,9 +1125,11 @@ function resetRoomGame(seed) {
   state.verticalVelocity = 0;
   state.jumpOffset = 0;
   state.grounded = true;
+  nextEnemyId = 1;
   controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
   spawnQueue.length = 0;
   spawnDripTimer = 0;
+  enemiesById.clear();
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
@@ -1109,7 +1139,7 @@ function resetRoomGame(seed) {
     scene.remove(decal.mesh);
     decal.mesh.material.dispose();
   });
-  spawnWave();
+  if (isEnemyHost()) spawnWave();
 }
 
 function createRemotePlayer(id) {
@@ -1158,6 +1188,60 @@ function drawPeerLabel(peer) {
   peer.labelTexture.needsUpdate = true;
 }
 
+function applyEnemyState(message) {
+  if (isEnemyHost()) return;
+  state.wave = message.wave ?? state.wave;
+  state.kills = message.kills ?? state.kills;
+
+  const seen = new Set();
+  for (const snapshot of message.enemies ?? []) {
+    const id = String(snapshot.id);
+    seen.add(id);
+    let enemy = enemiesById.get(id);
+    if (!enemy) {
+      enemy = createEnemy(snapshot.type ?? "raider");
+      enemy.netId = id;
+      enemiesById.set(id, enemy);
+      enemies.push(enemy);
+      scene.add(enemy.group);
+    }
+    enemy.health = snapshot.health ?? enemy.health;
+    enemy.spawnProgress = snapshot.spawnProgress ?? 1;
+    enemy.group.position.set(snapshot.x ?? 0, snapshot.y ?? 0.08, snapshot.z ?? 0);
+    enemy.group.rotation.y = snapshot.ry ?? enemy.group.rotation.y;
+    enemy.group.scale.setScalar(snapshot.scale ?? 1);
+  }
+
+  for (let i = enemies.length - 1; i >= 0; i -= 1) {
+    const enemy = enemies[i];
+    if (!seen.has(String(enemy.netId))) {
+      scene.remove(enemy.group);
+      enemiesById.delete(String(enemy.netId));
+      enemies.splice(i, 1);
+    }
+  }
+}
+
+function sendEnemyState() {
+  if (!network.roomId || !isEnemyHost()) return;
+  sendNetworkMessage({
+    type: "enemy-state",
+    wave: state.wave,
+    kills: state.kills,
+    enemies: enemies.map((enemy) => ({
+      id: enemy.netId,
+      type: enemy.type,
+      x: enemy.group.position.x,
+      y: enemy.group.position.y,
+      z: enemy.group.position.z,
+      ry: enemy.group.rotation.y,
+      scale: enemy.group.scale.x,
+      health: enemy.health,
+      spawnProgress: enemy.spawnProgress
+    }))
+  });
+}
+
 function sendNetworkMessage(payload) {
   if (network.socket?.readyState === WebSocket.OPEN) {
     network.socket.send(JSON.stringify(payload));
@@ -1167,7 +1251,7 @@ function sendNetworkMessage(payload) {
 function updateNetwork(delta) {
   for (const peer of network.peers.values()) {
     peer.group.position.lerp(peer.targetPosition, 1 - Math.pow(0.001, delta));
-    peer.group.rotation.y = THREE.MathUtils.damp(peer.group.rotation.y, peer.targetRotation, 14, delta);
+    peer.group.rotation.y = dampAngle(peer.group.rotation.y, peer.targetRotation, 14, delta);
     peer.weapon.material = weaponMaterial(WEAPONS[peer.weaponIndex] ?? WEAPONS[0]);
     drawPeerLabel(peer);
   }
@@ -1181,6 +1265,12 @@ function updateNetwork(delta) {
       scene.remove(shot.mesh);
       remoteProjectiles.splice(i, 1);
     }
+  }
+
+  network.lastEnemySend += delta;
+  if (network.roomId && isEnemyHost() && network.lastEnemySend >= 0.1) {
+    network.lastEnemySend = 0;
+    sendEnemyState();
   }
 
   network.lastSend += delta;
@@ -1215,6 +1305,9 @@ function spawnRemoteShot(message) {
 function startGame() {
   if (!state.started) {
     state.started = true;
+    if (!network.roomId && isEnemyHost() && enemies.length === 0 && spawnQueue.length === 0 && state.wave === 1 && state.kills === 0) {
+      spawnWave();
+    }
     overlay.classList.add("hidden");
   }
   if (!isTouchDevice() && !controls.isLocked) controls.lock();
@@ -1319,6 +1412,7 @@ function runConsoleCommand(rawCommand) {
     enemies.splice(0).forEach((enemy) => {
       makeScorch(enemy.group.position, 0xff4a18);
       scene.remove(enemy.group);
+      enemiesById.delete(String(enemy.netId));
       state.kills += 1;
     });
     logConsole("all monsters removed", "ok");
@@ -1329,6 +1423,7 @@ function runConsoleCommand(rawCommand) {
     state.wave = wave;
     spawnQueue.length = 0;
     spawnDripTimer = 0;
+    enemiesById.clear();
     enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
     spawnWave();
     logConsole(`wave ${wave} spawned`, "ok");
@@ -1401,19 +1496,22 @@ function restart() {
   state.boostX = 0;
   state.boostZ = 0;
   state.spawnTimer = 0;
+  nextEnemyId = 1;
   spawnQueue.length = 0;
   spawnDripTimer = 0;
   controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
+  enemiesById.clear();
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
-  spawnWave();
+  if (isEnemyHost()) spawnWave();
   overlay.classList.add("hidden");
   if (!isTouchDevice()) controls.lock();
 }
 
 function spawnWave() {
+  if (!isEnemyHost()) return;
   const waveCount = Math.min(6 + state.wave * 2, MAX_ENEMIES);
   for (let i = 0; i < waveCount; i += 1) {
     queueEnemySpawn(pickEnemyType(), i);
@@ -1421,6 +1519,7 @@ function spawnWave() {
 }
 
 function queueEnemySpawn(type, index = 0) {
+  if (!isEnemyHost()) return;
   spawnQueue.push({ type, index });
 }
 
@@ -1454,10 +1553,12 @@ function spawnEnemy(type, index = 0) {
   const angle = gameRandom() * Math.PI * 2 + index * 0.35;
   const radius = 26 + gameRandom() * 11;
   const enemy = createEnemy(type);
+  enemy.netId = String(nextEnemyId++);
   enemy.group.position.set(Math.sin(angle) * radius, -1.35, Math.cos(angle) * radius);
   enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
   scene.add(enemy.group);
+  enemiesById.set(enemy.netId, enemy);
   enemies.push(enemy);
 }
 
@@ -1807,6 +1908,11 @@ function updateTimers(delta) {
   state.invulnerable = Math.max(0, state.invulnerable - delta);
   state.spawnTimer = Math.max(0, state.spawnTimer - delta);
   muzzleLight.intensity = THREE.MathUtils.damp(muzzleLight.intensity, 0, 18, delta);
+  if (!state.started && !network.roomId) {
+    state.nextWaveAt = 0;
+    return;
+  }
+  if (!isEnemyHost()) return;
   processSpawnQueue(delta);
 
   if (enemies.length === 0 && spawnQueue.length === 0 && state.alive) {
@@ -1904,12 +2010,26 @@ function updatePlayer(delta) {
   }
 }
 
+function getClosestPlayerPosition(enemyPosition, localPlayerPosition) {
+  targetTmp.copy(localPlayerPosition);
+  let bestDistance = Math.hypot(enemyPosition.x - targetTmp.x, enemyPosition.z - targetTmp.z);
+  for (const peer of network.peers.values()) {
+    const distance = Math.hypot(enemyPosition.x - peer.group.position.x, enemyPosition.z - peer.group.position.z);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      targetTmp.set(peer.group.position.x, PLAYER_HEIGHT + peer.group.position.y, peer.group.position.z);
+    }
+  }
+  return targetTmp;
+}
+
 function updateEnemies(delta) {
+  if (!isEnemyHost()) return;
   const playerPos = controls.getObject().position;
   for (let i = enemies.length - 1; i >= 0; i -= 1) {
     const enemy = enemies[i];
     const pos = enemy.group.position;
-    const toPlayer = tmpVec.copy(playerPos).sub(pos);
+    const toPlayer = tmpVec.copy(getClosestPlayerPosition(pos, playerPos)).sub(pos);
     const distance = Math.max(0.001, Math.hypot(toPlayer.x, toPlayer.z));
     const dirX = toPlayer.x / distance;
     const dirZ = toPlayer.z / distance;
@@ -1955,6 +2075,7 @@ function updateEnemies(delta) {
 }
 
 function updateProjectiles(delta) {
+  const canDamageEnemies = isEnemyHost();
   for (let i = projectiles.length - 1; i >= 0; i -= 1) {
     const shot = projectiles[i];
     shot.ttl -= delta;
@@ -1964,7 +2085,7 @@ function updateProjectiles(delta) {
     shot.mesh.rotation.y += delta * 24;
 
     let hit = false;
-    for (let e = enemies.length - 1; e >= 0; e -= 1) {
+    if (canDamageEnemies) for (let e = enemies.length - 1; e >= 0; e -= 1) {
       const enemy = enemies[e];
       const radius = enemy.type === "brute" ? 1.7 : 1.1;
       const dy = Math.abs(shot.mesh.position.y - (enemy.group.position.y + 1.55));
@@ -2165,6 +2286,7 @@ function killEnemy(enemy, index) {
   makeScorch(enemy.group.position, enemy.type === "wraith" ? 0x20c8a4 : 0xff3218);
   spawnMuzzleSparks(enemy.group.position.clone().setY(1.6), worldUp, enemy.type === "brute" ? 44 : 28, enemy.type === "wraith" ? 0x5fffe0 : 0xff5a1d);
   scene.remove(enemy.group);
+  enemiesById.delete(String(enemy.netId));
   enemies.splice(index, 1);
 }
 
@@ -2184,6 +2306,12 @@ function explodeProjectile(shot) {
   if (shot.exploded) return;
   shot.exploded = true;
   const origin = shot.mesh.position.clone();
+  if (!isEnemyHost()) {
+    makeScorch(origin, shot.color ?? 0xff4a18);
+    spawnMuzzleSparks(origin, worldUp, 30, shot.color ?? 0xff4a18);
+    state.shake = Math.max(state.shake, 0.08);
+    return;
+  }
   for (let e = enemies.length - 1; e >= 0; e -= 1) {
     const enemy = enemies[e];
     const distance = enemy.group.position.distanceTo(origin);

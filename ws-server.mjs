@@ -25,6 +25,7 @@ function roomSummary(room) {
     id: room.id,
     name: room.name,
     players: room.players.size,
+    hostId: room.hostId,
     seed: room.seed,
     createdAt: room.createdAt
   };
@@ -58,9 +59,15 @@ function leaveRoom(id) {
 
   const room = rooms.get(roomId);
   if (room) {
+    const wasHost = room.hostId === id;
     room.players.delete(id);
     roomBroadcast(roomId, id, { type: "peer-leave", id });
-    if (room.players.size === 0) rooms.delete(roomId);
+    if (room.players.size === 0) {
+      rooms.delete(roomId);
+    } else if (wasHost) {
+      room.hostId = room.players.values().next().value;
+      roomBroadcast(roomId, id, { type: "host-changed", hostId: room.hostId });
+    }
   }
   socket.roomId = null;
   broadcastRoomList();
@@ -77,6 +84,7 @@ function joinRoom(id, roomId, playerName) {
   leaveRoom(id);
   socket.playerName = cleanName(playerName, socket.playerName || `P${id}`);
   socket.roomId = roomId;
+  if (!room.hostId || !room.players.has(room.hostId)) room.hostId = id;
   room.players.add(id);
   send(socket, { type: "room-joined", room: roomSummary(room), playerName: socket.playerName });
   roomBroadcast(roomId, id, { type: "peer-join", id, playerName: socket.playerName });
@@ -109,6 +117,7 @@ wss.on("connection", (socket) => {
         const room = {
           id: String(nextRoomId++),
           name,
+          hostId: id,
           seed: Math.floor(Math.random() * 2147483647),
           players: new Set(),
           createdAt: Date.now()
