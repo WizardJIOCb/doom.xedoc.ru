@@ -83,6 +83,7 @@ const tmpVec = new THREE.Vector3();
 const targetTmp = new THREE.Vector3();
 const aimPoint = new THREE.Vector3();
 const worldUp = new THREE.Vector3(0, 1, 0);
+const ragdollCornerTmp = new THREE.Vector3();
 const WEAPON_BASE_POSITION = new THREE.Vector3(0.12, -0.34, -0.56);
 
 const keys = new Set();
@@ -2311,17 +2312,18 @@ function updateEffects(delta) {
     part.mesh.rotation.y += part.spin.y * delta;
     part.mesh.rotation.z += part.spin.z * delta;
 
-    if (part.mesh.position.y < part.floorY) {
-      part.mesh.position.y = part.floorY;
+    const floorOffset = getRagdollFloorOffset(part);
+    if (part.mesh.position.y + floorOffset < 0.055) {
+      part.mesh.position.y = 0.055 - floorOffset;
       if (Math.abs(part.velocity.y) > 1.2) {
         part.velocity.y = Math.abs(part.velocity.y) * 0.22;
         part.spin.multiplyScalar(0.58);
       } else {
         part.velocity.y = 0;
-        part.spin.multiplyScalar(0.78);
+        part.spin.multiplyScalar(0.52);
       }
-      part.velocity.x *= 0.78;
-      part.velocity.z *= 0.78;
+      part.velocity.x *= 0.68;
+      part.velocity.z *= 0.68;
     } else {
       part.velocity.x *= Math.exp(-0.45 * delta);
       part.velocity.z *= Math.exp(-0.45 * delta);
@@ -2416,6 +2418,33 @@ function clearRagdolls() {
   ragdolls.splice(0).forEach((part) => scene.remove(part.mesh));
 }
 
+function makeRagdollContactCorners(mesh) {
+  mesh.geometry.computeBoundingBox();
+  const bounds = mesh.geometry.boundingBox;
+  if (!bounds) return [new THREE.Vector3(0, -0.2, 0)];
+  const sx = Math.abs(mesh.scale.x);
+  const sy = Math.abs(mesh.scale.y);
+  const sz = Math.abs(mesh.scale.z);
+  const corners = [];
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        corners.push(new THREE.Vector3(x * sx, y * sy, z * sz));
+      }
+    }
+  }
+  return corners;
+}
+
+function getRagdollFloorOffset(part) {
+  let lowest = Infinity;
+  for (const corner of part.contactCorners) {
+    ragdollCornerTmp.copy(corner).applyQuaternion(part.mesh.quaternion);
+    if (ragdollCornerTmp.y < lowest) lowest = ragdollCornerTmp.y;
+  }
+  return Number.isFinite(lowest) ? lowest : -0.2;
+}
+
 function die() {
   state.alive = false;
   state.health = 0;
@@ -2464,9 +2493,7 @@ function spawnEnemyRagdoll(enemy, force = 1) {
     mesh.receiveShadow = child.receiveShadow;
     scene.add(mesh);
 
-    child.geometry.computeBoundingBox();
-    const bounds = child.geometry.boundingBox;
-    const height = bounds ? (bounds.max.y - bounds.min.y) * Math.abs(mesh.scale.y) : 0.4;
+    const contactCorners = makeRagdollContactCorners(mesh);
     const sideKick = (Math.random() - 0.5) * 6.5 * force;
     const launch = 4.5 + Math.random() * 7.5;
     const velocity = new THREE.Vector3(
@@ -2483,7 +2510,7 @@ function spawnEnemyRagdoll(enemy, force = 1) {
       mesh,
       velocity,
       spin,
-      floorY: Math.max(0.06, Math.min(0.55, height * 0.42)),
+      contactCorners,
       ttl: 4.2 + Math.random() * 1.8
     });
   }
