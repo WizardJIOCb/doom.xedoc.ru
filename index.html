@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Iron Citadel</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+
+      <div id="overlay" class="overlay">
+        <div class="brand">
+          <span class="sigil"></span>
+          <p>IRON CITADEL</p>
+        </div>
+        <h1>Hellforged Siege</h1>
+        <button id="startButton" type="button">Enter the Citadel</button>
+        <div class="lobby-panel">
+          <div class="lobby-row">
+            <input id="roomNameInput" type="text" maxlength="32" value="Iron Arena" aria-label="Room name" />
+            <button id="createRoomButton" type="button">Create Game</button>
+            <button id="refreshRoomsButton" type="button">Refresh</button>
+          </div>
+          <div id="roomStatus" class="room-status">Solo mode. Create or join a room for multiplayer.</div>
+          <div id="roomList" class="room-list"></div>
+        </div>
+      </div>
+
+      <div id="hud" class="hud" aria-live="polite">
+        <div class="meter stack">
+          <span>VITAL</span>
+          <strong id="healthText">100</strong>
+          <i id="healthBar"></i>
+        </div>
+        <div class="meter stack">
+          <span>AEGIS</span>
+          <strong id="armorText">75</strong>
+          <i id="armorBar"></i>
+        </div>
+        <div class="status stack">
+          <span id="waveText">WAVE I</span>
+          <strong id="killText">0</strong>
+        </div>
+        <div class="weapon stack">
+          <span>1 CARBINE</span>
+          <strong id="ammoText">999</strong>
+          <i id="shieldCooldown"></i>
+        </div>
+      </div>
+
+      <div class="reticle" aria-hidden="true">
+        <span></span>
+      </div>
+
+      <div id="damageVignette" class="damage-vignette"></div>
+      <div id="hitFlash" class="hit-flash"></div>
+
+      <div id="cheatConsole" class="cheat-console hidden">
+        <div id="consoleLog" class="console-log"></div>
+        <form id="consoleForm" class="console-form">
+          <span>&gt;</span>
+          <input id="consoleInput" type="text" autocomplete="off" spellcheck="false" />
+        </form>
+      </div>
+
+      <div id="touchControls" class="touch-controls" aria-hidden="true">
+        <div id="stickBase" class="stick-base"><div id="stickKnob" class="stick-knob"></div></div>
+        <button id="touchShield" class="touch-button shield" type="button">A</button>
+        <button id="touchFire" class="touch-button fire" type="button">F</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

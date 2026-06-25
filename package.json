@@ -1,0 +1,19 @@
+{
+  "name": "iron-citadel-webgl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "net": "node ws-server.mjs",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "three": "^0.166.1",
+    "vite": "^8.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "playwright": "^1.45.1"
+  }
+}
