@@ -1039,6 +1039,10 @@ function handleNetworkMessage(message) {
     }
     peer.playerName = message.playerName || peer.playerName || `P${message.id}`;
     peer.targetPosition.set(message.x ?? 0, (message.y ?? PLAYER_HEIGHT) - PLAYER_HEIGHT, message.z ?? 0);
+    if (isNewPeer) {
+      peer.group.position.copy(peer.targetPosition);
+      peer.lastPosition.copy(peer.targetPosition);
+    }
     const fallbackRotation = Number.isFinite(message.ry) ? message.ry : peer.targetRotation;
     const rawTargetRotation = lookAngle(message.lx, message.lz, fallbackRotation - Math.PI) + Math.PI;
     peer.targetRotation = unwrapAngle(peer.targetRotation, rawTargetRotation);
@@ -1208,6 +1212,7 @@ function resetRoomGame(seed) {
 
 function createRemotePlayer(id) {
   const group = new THREE.Group();
+  const limbs = { arms: [], legs: [] };
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.78, 1.25, 0.48), materials.metal);
   body.position.y = 1.1;
   body.castShadow = true;
@@ -1221,8 +1226,19 @@ function createRemotePlayer(id) {
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 4), materials.rune);
   nose.position.set(0, 1.92, -0.42);
   nose.rotation.x = -Math.PI / 2;
-  const leftShoulder = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.18), materials.bone);
-  leftShoulder.position.set(-0.55, 1.22, 0.02);
+  for (let side = -1; side <= 1; side += 2) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.18), materials.bone);
+    arm.position.set(side * 0.55, 1.22, 0.02);
+    arm.castShadow = true;
+    group.add(arm);
+    limbs.arms.push({ mesh: arm, side, baseY: arm.position.y, baseZ: arm.position.z });
+
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.64, 0.2), materials.metal);
+    leg.position.set(side * 0.22, 0.34, 0.04);
+    leg.castShadow = true;
+    group.add(leg);
+    limbs.legs.push({ mesh: leg, side, baseY: leg.position.y, baseZ: leg.position.z });
+  }
   const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.9), materials.rune);
   weapon.position.set(0.58, 1.26, -0.44);
   const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.1), materials.gold);
@@ -1234,16 +1250,25 @@ function createRemotePlayer(id) {
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true }));
   label.position.y = 2.75;
   label.scale.set(1.8, 0.45, 1);
-  group.add(body, chest, head, visor, nose, leftShoulder, weapon, muzzle, label);
+  group.add(body, chest, head, visor, nose, weapon, muzzle, label);
   return {
     id,
     group,
+    body,
+    head,
     weapon,
+    muzzle,
+    limbs,
+    bodyBaseY: body.position.y,
+    headBaseY: head.position.y,
     label,
     labelCanvas,
     labelTexture,
     targetPosition: new THREE.Vector3(),
+    lastPosition: new THREE.Vector3(),
     targetRotation: 0,
+    walkPhase: 0,
+    moveSpeed: 0,
     weaponIndex: 0,
     playerName: `P${id}`
   };
@@ -1261,6 +1286,40 @@ function drawPeerLabel(peer) {
   peer.labelTexture.needsUpdate = true;
 }
 
+function animateRemotePlayer(peer, delta) {
+  const moveAmount = THREE.MathUtils.clamp(peer.moveSpeed / 5.5, 0, 1);
+  peer.walkPhase += delta * (4.5 + peer.moveSpeed * 1.4) * (0.25 + moveAmount);
+  const phase = peer.walkPhase;
+  const stride = moveAmount * 0.85;
+  const bounce = Math.abs(Math.sin(phase)) * moveAmount;
+
+  peer.body.position.y = THREE.MathUtils.damp(peer.body.position.y, peer.bodyBaseY + bounce * 0.055, 16, delta);
+  peer.body.rotation.z = THREE.MathUtils.damp(peer.body.rotation.z, Math.sin(phase * 0.5) * moveAmount * 0.05, 12, delta);
+  peer.head.position.y = THREE.MathUtils.damp(peer.head.position.y, peer.headBaseY + bounce * 0.035, 16, delta);
+
+  for (const leg of peer.limbs.legs) {
+    const cycle = Math.sin(phase + (leg.side > 0 ? 0 : Math.PI));
+    const lift = Math.max(0, -Math.cos(phase + (leg.side > 0 ? 0 : Math.PI))) * moveAmount;
+    leg.mesh.rotation.x = THREE.MathUtils.damp(leg.mesh.rotation.x, cycle * stride, 18, delta);
+    leg.mesh.rotation.z = THREE.MathUtils.damp(leg.mesh.rotation.z, -leg.side * moveAmount * 0.05, 14, delta);
+    leg.mesh.position.y = THREE.MathUtils.damp(leg.mesh.position.y, leg.baseY + lift * 0.08, 18, delta);
+    leg.mesh.position.z = THREE.MathUtils.damp(leg.mesh.position.z, leg.baseZ - cycle * moveAmount * 0.08, 18, delta);
+  }
+
+  for (const arm of peer.limbs.arms) {
+    const cycle = Math.sin(phase + (arm.side > 0 ? Math.PI : 0));
+    arm.mesh.rotation.x = THREE.MathUtils.damp(arm.mesh.rotation.x, cycle * stride * 0.7, 16, delta);
+    arm.mesh.rotation.z = THREE.MathUtils.damp(arm.mesh.rotation.z, arm.side * (0.1 + moveAmount * 0.12), 14, delta);
+    arm.mesh.position.y = THREE.MathUtils.damp(arm.mesh.position.y, arm.baseY + bounce * 0.025, 14, delta);
+  }
+
+  const weaponBob = Math.sin(phase + Math.PI) * moveAmount;
+  peer.weapon.rotation.x = THREE.MathUtils.damp(peer.weapon.rotation.x, weaponBob * 0.18, 14, delta);
+  peer.weapon.position.y = THREE.MathUtils.damp(peer.weapon.position.y, 1.26 + bounce * 0.035, 14, delta);
+  peer.muzzle.rotation.copy(peer.weapon.rotation);
+  peer.muzzle.position.y = peer.weapon.position.y;
+}
+
 function applyEnemyState(message) {
   if (isEnemyHost()) return;
   state.wave = message.wave ?? state.wave;
@@ -1271,16 +1330,19 @@ function applyEnemyState(message) {
     const id = String(snapshot.id);
     seen.add(id);
     let enemy = enemiesById.get(id);
+    let isNewEnemy = false;
     if (!enemy) {
       enemy = createEnemy(snapshot.type ?? "raider");
       enemy.netId = id;
       enemiesById.set(id, enemy);
       enemies.push(enemy);
       scene.add(enemy.group);
+      isNewEnemy = true;
     }
     enemy.health = snapshot.health ?? enemy.health;
     enemy.spawnProgress = snapshot.spawnProgress ?? 1;
     enemy.group.position.set(snapshot.x ?? 0, snapshot.y ?? 0.08, snapshot.z ?? 0);
+    if (isNewEnemy) enemy.lastPosition.copy(enemy.group.position);
     enemy.group.rotation.y = snapshot.ry ?? enemy.group.rotation.y;
     enemy.group.scale.setScalar(snapshot.scale ?? 1);
   }
@@ -1324,9 +1386,13 @@ function sendNetworkMessage(payload) {
 
 function updateNetwork(delta) {
   for (const peer of network.peers.values()) {
+    const previousPosition = peer.group.position.clone();
     peer.group.position.lerp(peer.targetPosition, 1 - Math.pow(0.001, delta));
+    peer.moveSpeed = previousPosition.distanceTo(peer.group.position) / Math.max(delta, 0.001);
     peer.group.rotation.y = dampAngle(peer.group.rotation.y, peer.targetRotation, 45, delta);
     peer.weapon.material = weaponMaterial(WEAPONS[peer.weaponIndex] ?? WEAPONS[0]);
+    animateRemotePlayer(peer, delta);
+    peer.lastPosition.copy(peer.group.position);
     drawPeerLabel(peer);
   }
 
@@ -1640,6 +1706,7 @@ function spawnEnemy(type, index = 0) {
   const enemy = createEnemy(type);
   enemy.netId = `${network.id ?? "local"}-${nextEnemyId++}`;
   enemy.group.position.set(Math.sin(angle) * radius, -1.35, Math.cos(angle) * radius);
+  enemy.lastPosition.copy(enemy.group.position);
   enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
   scene.add(enemy.group);
@@ -1757,6 +1824,7 @@ function createEnemy(type) {
   const scale = stats.scale;
   const bodyMat = stats.bodyMat;
   const trimMat = stats.trimMat;
+  const limbs = { arms: [], legs: [], feet: [], wings: [] };
 
   const body = new THREE.Mesh(geometries.enemyBody, bodyMat);
   body.position.y = 1.58 * scale;
@@ -1799,6 +1867,7 @@ function createEnemy(type) {
     arm.scale.set(scale * 0.82, scale * 0.9, scale * 0.82);
     arm.castShadow = true;
     group.add(arm);
+    limbs.arms.push({ mesh: arm, side: s, baseY: arm.position.y, baseZ: arm.position.z, baseRotZ: arm.rotation.z });
 
     const shoulder = new THREE.Mesh(new THREE.DodecahedronGeometry(0.28 * scale, 0), trimMat);
     shoulder.position.set(s * 0.76 * scale, 2.1 * scale, 0.02);
@@ -1811,11 +1880,13 @@ function createEnemy(type) {
     leg.scale.set(scale * 0.72, scale * 0.9, scale * 0.72);
     leg.castShadow = true;
     group.add(leg);
+    limbs.legs.push({ mesh: leg, side: s, baseY: leg.position.y, baseZ: leg.position.z, baseRotZ: leg.rotation.z });
 
     const foot = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 0.18 * scale, 0.68 * scale), type === "crawler" ? materials.rune : trimMat);
     foot.position.set(s * 0.28 * scale, 0.12 * scale, 0.18 * scale);
     foot.castShadow = true;
     group.add(foot);
+    limbs.feet.push({ mesh: foot, side: s, baseY: foot.position.y, baseZ: foot.position.z });
   }
 
   const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16 * scale, 0.14 * scale, stats.weaponLength * scale), trimMat);
@@ -1848,6 +1919,7 @@ function createEnemy(type) {
       wing.rotation.x = -0.65;
       wing.castShadow = true;
       group.add(wing);
+      limbs.wings.push({ mesh: wing, side: s, baseRotZ: wing.rotation.z, baseRotX: wing.rotation.x });
     }
   }
 
@@ -1864,6 +1936,12 @@ function createEnemy(type) {
     type,
     group,
     body,
+    chest,
+    head,
+    blade,
+    limbs,
+    bodyBaseY: body.position.y,
+    headBaseY: head.position.y,
     health: stats.health + state.wave * stats.healthPerWave,
     speed: stats.speed,
     damage: stats.damage,
@@ -1873,6 +1951,8 @@ function createEnemy(type) {
     spawnProgress: 0,
     attackTimer: 0.9 + gameRandom() * 1.1,
     bob: gameRandom() * Math.PI * 2,
+    lastPosition: group.position.clone(),
+    moveSpeed: 0,
     dead: false
   };
 }
@@ -2108,17 +2188,76 @@ function getClosestPlayerPosition(enemyPosition, localPlayerPosition) {
   return targetTmp;
 }
 
+function animateEnemyWalk(enemy, delta, moveSpeed, attacking) {
+  const speedAmount = THREE.MathUtils.clamp(moveSpeed / Math.max(enemy.speed, 0.001), 0, 1);
+  const attackAmount = attacking && enemy.ranged ? 0.35 : attacking ? 0.18 : 0;
+  const amount = Math.max(speedAmount, attackAmount);
+  const typePace = enemy.type === "crawler" ? 1.45 : enemy.type === "brute" ? 0.78 : 1;
+  enemy.bob += delta * (3.8 + moveSpeed * 1.1) * typePace * (0.18 + amount);
+
+  const phase = enemy.bob;
+  const bounce = Math.abs(Math.sin(phase)) * amount;
+  const sway = Math.sin(phase * 0.5) * amount;
+  enemy.body.position.y = THREE.MathUtils.damp(enemy.body.position.y, enemy.bodyBaseY + bounce * 0.08, 15, delta);
+  enemy.body.rotation.x = THREE.MathUtils.damp(enemy.body.rotation.x, Math.sin(phase * 0.8) * amount * 0.055, 14, delta);
+  enemy.body.rotation.z = THREE.MathUtils.damp(enemy.body.rotation.z, sway * 0.08, 14, delta);
+  enemy.head.position.y = THREE.MathUtils.damp(enemy.head.position.y, enemy.headBaseY + bounce * 0.055, 15, delta);
+
+  for (const leg of enemy.limbs.legs) {
+    const sidePhase = phase + (leg.side > 0 ? 0 : Math.PI);
+    const cycle = Math.sin(sidePhase);
+    const lift = Math.max(0, -Math.cos(sidePhase)) * amount;
+    leg.mesh.rotation.x = THREE.MathUtils.damp(leg.mesh.rotation.x, cycle * amount * 0.72, 18, delta);
+    leg.mesh.rotation.z = THREE.MathUtils.damp(leg.mesh.rotation.z, leg.baseRotZ - leg.side * amount * 0.08, 16, delta);
+    leg.mesh.position.y = THREE.MathUtils.damp(leg.mesh.position.y, leg.baseY + lift * 0.14, 18, delta);
+    leg.mesh.position.z = THREE.MathUtils.damp(leg.mesh.position.z, leg.baseZ - cycle * amount * 0.12, 18, delta);
+  }
+
+  for (const foot of enemy.limbs.feet) {
+    const sidePhase = phase + (foot.side > 0 ? 0 : Math.PI);
+    const cycle = Math.sin(sidePhase);
+    const lift = Math.max(0, -Math.cos(sidePhase)) * amount;
+    foot.mesh.rotation.x = THREE.MathUtils.damp(foot.mesh.rotation.x, -cycle * amount * 0.45, 18, delta);
+    foot.mesh.position.y = THREE.MathUtils.damp(foot.mesh.position.y, foot.baseY + lift * 0.1, 18, delta);
+    foot.mesh.position.z = THREE.MathUtils.damp(foot.mesh.position.z, foot.baseZ - cycle * amount * 0.18, 18, delta);
+  }
+
+  for (const arm of enemy.limbs.arms) {
+    const cycle = Math.sin(phase + (arm.side > 0 ? Math.PI : 0));
+    const attackReach = attacking ? -0.28 : 0;
+    arm.mesh.rotation.x = THREE.MathUtils.damp(arm.mesh.rotation.x, cycle * amount * 0.62 + attackReach, 16, delta);
+    arm.mesh.rotation.z = THREE.MathUtils.damp(arm.mesh.rotation.z, arm.baseRotZ + arm.side * amount * 0.12, 16, delta);
+    arm.mesh.position.y = THREE.MathUtils.damp(arm.mesh.position.y, arm.baseY + bounce * 0.045, 16, delta);
+    arm.mesh.position.z = THREE.MathUtils.damp(arm.mesh.position.z, arm.baseZ - Math.abs(cycle) * amount * 0.08, 16, delta);
+  }
+
+  for (const wing of enemy.limbs.wings) {
+    wing.mesh.rotation.z = THREE.MathUtils.damp(wing.mesh.rotation.z, wing.baseRotZ + Math.sin(phase * 1.4) * amount * 0.16, 10, delta);
+    wing.mesh.rotation.x = THREE.MathUtils.damp(wing.mesh.rotation.x, wing.baseRotX - Math.abs(Math.sin(phase)) * amount * 0.1, 10, delta);
+  }
+
+  if (enemy.blade) {
+    enemy.blade.rotation.z = THREE.MathUtils.damp(enemy.blade.rotation.z, Math.sin(phase + 0.6) * amount * 0.18, 12, delta);
+  }
+}
+
 function updateEnemies(delta) {
-  if (!isEnemyHost()) return;
+  const canControlEnemies = isEnemyHost();
   const playerPos = controls.getObject().position;
   for (let i = enemies.length - 1; i >= 0; i -= 1) {
     const enemy = enemies[i];
     const pos = enemy.group.position;
+    if (!canControlEnemies) {
+      const visualSpeed = enemy.lastPosition.distanceTo(pos) / Math.max(delta, 0.001);
+      animateEnemyWalk(enemy, delta, visualSpeed, false);
+      enemy.lastPosition.copy(pos);
+      continue;
+    }
+
     const toPlayer = tmpVec.copy(getClosestPlayerPosition(pos, playerPos)).sub(pos);
     const distance = Math.max(0.001, Math.hypot(toPlayer.x, toPlayer.z));
     const dirX = toPlayer.x / distance;
     const dirZ = toPlayer.z / distance;
-    enemy.bob += delta * (enemy.type === "wraith" ? 6 : 3.5);
 
     enemy.group.rotation.y = Math.atan2(dirX, dirZ);
     if (enemy.spawnProgress < 1) {
@@ -2126,20 +2265,20 @@ function updateEnemies(delta) {
       const emerge = 1 - Math.pow(1 - enemy.spawnProgress, 3);
       enemy.group.position.y = THREE.MathUtils.lerp(-1.35, 0.08, emerge);
       enemy.group.scale.setScalar(THREE.MathUtils.lerp(0.62, 1, emerge));
-      enemy.body.rotation.x = Math.sin(enemy.bob) * 0.025;
-      enemy.body.rotation.z = Math.cos(enemy.bob * 0.7) * 0.03;
+      animateEnemyWalk(enemy, delta, 0.25, false);
+      enemy.lastPosition.copy(pos);
       continue;
     }
 
     enemy.group.position.y = 0.08;
     enemy.group.scale.setScalar(1);
-    enemy.body.rotation.x = Math.sin(enemy.bob) * 0.04;
-    enemy.body.rotation.z = Math.cos(enemy.bob * 0.7) * 0.05;
+    let moveSpeed = 0;
 
     if (distance > enemy.attackRange) {
       const stride = enemy.speed * delta * (state.alive ? 1 : 0.25);
       pos.x += dirX * stride;
       pos.z += dirZ * stride;
+      moveSpeed = stride / Math.max(delta, 0.001);
     }
 
     enemy.attackTimer -= delta;
@@ -2156,6 +2295,8 @@ function updateEnemies(delta) {
     if (distance < PLAYER_RADIUS + ENEMY_HIT_RADIUS && state.invulnerable <= 0) {
       damagePlayer(Math.ceil(enemy.damage * 0.5));
     }
+    animateEnemyWalk(enemy, delta, moveSpeed, distance <= enemy.attackRange);
+    enemy.lastPosition.copy(pos);
   }
 }
 
