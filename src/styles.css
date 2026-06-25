@@ -109,7 +109,7 @@ button {
 
 .lobby-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(160px, 1fr) auto auto;
   gap: 8px;
 }
 
@@ -129,6 +129,16 @@ button {
   min-width: 118px;
   min-height: 44px;
   font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  .lobby-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .lobby-row button {
+    min-width: 0;
+  }
 }
 
 .room-status {

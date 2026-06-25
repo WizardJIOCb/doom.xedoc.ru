@@ -7,6 +7,13 @@ const rooms = new Map();
 let nextId = 1;
 let nextRoomId = 1;
 
+function cleanName(value, fallback) {
+  return String(value || fallback)
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 20) || fallback;
+}
+
 function send(socket, payload) {
   if (socket.readyState === socket.OPEN) {
     socket.send(JSON.stringify(payload));
@@ -59,7 +66,7 @@ function leaveRoom(id) {
   broadcastRoomList();
 }
 
-function joinRoom(id, roomId) {
+function joinRoom(id, roomId, playerName) {
   const socket = clients.get(id);
   const room = rooms.get(roomId);
   if (!socket || !room) {
@@ -68,18 +75,20 @@ function joinRoom(id, roomId) {
   }
 
   leaveRoom(id);
+  socket.playerName = cleanName(playerName, socket.playerName || `P${id}`);
   socket.roomId = roomId;
   room.players.add(id);
-  send(socket, { type: "room-joined", room: roomSummary(room) });
-  roomBroadcast(roomId, id, { type: "peer-join", id });
+  send(socket, { type: "room-joined", room: roomSummary(room), playerName: socket.playerName });
+  roomBroadcast(roomId, id, { type: "peer-join", id, playerName: socket.playerName });
   broadcastRoomList();
-  console.log(`[ws] player ${id} joined room ${room.name} (${room.id})`);
+  console.log(`[ws] player ${id} (${socket.playerName}) joined room ${room.name} (${room.id})`);
 }
 
 wss.on("connection", (socket) => {
   const id = String(nextId++);
   clients.set(id, socket);
   socket.roomId = null;
+  socket.playerName = `P${id}`;
   send(socket, { type: "welcome", id });
   sendRoomList(socket);
   console.log(`[ws] player ${id} connected`);
@@ -95,6 +104,7 @@ wss.on("connection", (socket) => {
       }
 
       if (message.type === "create-room") {
+        socket.playerName = cleanName(message.playerName, socket.playerName);
         const name = String(message.name || `Game ${nextRoomId}`).trim().slice(0, 32) || `Game ${nextRoomId}`;
         const room = {
           id: String(nextRoomId++),
@@ -104,12 +114,12 @@ wss.on("connection", (socket) => {
           createdAt: Date.now()
         };
         rooms.set(room.id, room);
-        joinRoom(id, room.id);
+        joinRoom(id, room.id, socket.playerName);
         return;
       }
 
       if (message.type === "join-room") {
-        joinRoom(id, String(message.roomId || ""));
+        joinRoom(id, String(message.roomId || ""), message.playerName);
         return;
       }
 
@@ -124,7 +134,7 @@ wss.on("connection", (socket) => {
         return;
       }
 
-      roomBroadcast(socket.roomId, id, { ...message, id, roomId: socket.roomId });
+      roomBroadcast(socket.roomId, id, { ...message, id, playerName: socket.playerName, roomId: socket.roomId });
     } catch {
       send(socket, { type: "error", message: "bad json" });
     }

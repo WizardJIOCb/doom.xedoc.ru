@@ -5,6 +5,7 @@ import "./styles.css";
 const canvas = document.querySelector("#game");
 const overlay = document.querySelector("#overlay");
 const startButton = document.querySelector("#startButton");
+const playerNameInput = document.querySelector("#playerNameInput");
 const roomNameInput = document.querySelector("#roomNameInput");
 const createRoomButton = document.querySelector("#createRoomButton");
 const refreshRoomsButton = document.querySelector("#refreshRoomsButton");
@@ -138,6 +139,7 @@ const network = {
   id: null,
   roomId: null,
   roomName: "",
+  playerName: "Slayer",
   seed: 1,
   rooms: [],
   peers: new Map(),
@@ -162,6 +164,14 @@ const input = {
 
 const materials = {};
 const geometries = {};
+const sparkMaterials = new Map();
+const sparkPool = [];
+const spawnQueue = [];
+const MAX_SPARK_POOL = 220;
+const SPAWN_DRIP_DELAY = 0.14;
+const ENEMY_EMERGE_TIME = 0.65;
+
+let spawnDripTimer = 0;
 
 initAssets();
 buildWorld();
@@ -331,9 +341,19 @@ function initAssets() {
   geometries.enemyArm = new THREE.BoxGeometry(0.36, 1.35, 0.36);
   geometries.enemyLeg = new THREE.BoxGeometry(0.44, 1.25, 0.44);
   geometries.projectile = new THREE.SphereGeometry(0.16, 12, 8);
+  geometries.enemyBolt = new THREE.OctahedronGeometry(0.32, 0);
   geometries.shield = new THREE.CylinderGeometry(0.76, 0.76, 0.16, 6);
   geometries.pickup = new THREE.DodecahedronGeometry(0.54, 0);
   geometries.jumpPad = new THREE.CylinderGeometry(1.8, 2.25, 0.34, 6);
+  geometries.spark = new THREE.SphereGeometry(1, 6, 4);
+  geometries.scorch = new THREE.CircleGeometry(1, 16);
+  geometries.weaponPickupCore = new THREE.BoxGeometry(0.82, 0.22, 0.42);
+  geometries.weaponPickupBarrel = new THREE.CylinderGeometry(0.07, 0.11, 0.9, 8);
+  geometries.weaponPickupRing = new THREE.TorusGeometry(0.32, 0.035, 8, 18);
+
+  for (let i = 0; i < MAX_SPARK_POOL; i += 1) {
+    sparkPool.push(new THREE.Mesh(geometries.spark, sparkMaterial(0xff5a1d)));
+  }
 }
 
 function buildWorld() {
@@ -724,6 +744,7 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (isTextEntryActive(event.target)) return;
     if (event.code === "Backquote" || event.key === "`" || event.key === "~" || event.key === "ё" || event.key === "Ё") {
       event.preventDefault();
       toggleConsole();
@@ -843,6 +864,13 @@ function bindEvents() {
   window.addEventListener("resize", onResize);
 }
 
+function isTextEntryActive(target) {
+  const element = target instanceof HTMLElement ? target : document.activeElement;
+  if (!element) return false;
+  if (element.isContentEditable) return true;
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
+}
+
 function initNetwork() {
   network.statusEl = document.createElement("div");
   network.statusEl.className = "net-status";
@@ -905,6 +933,8 @@ function handleNetworkMessage(message) {
   if (message.type === "room-joined") {
     network.roomId = message.room?.id ?? null;
     network.roomName = message.room?.name ?? "";
+    network.playerName = message.playerName ?? getPlayerName();
+    playerNameInput.value = network.playerName;
     network.seed = message.room?.seed ?? 1;
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
@@ -934,6 +964,14 @@ function handleNetworkMessage(message) {
     network.peers.delete(message.id);
     return;
   }
+  if (message.type === "peer-join") {
+    const peer = network.peers.get(message.id) ?? createRemotePlayer(message.id);
+    peer.playerName = message.playerName || `P${message.id}`;
+    network.peers.set(message.id, peer);
+    if (!peer.group.parent) scene.add(peer.group);
+    drawPeerLabel(peer);
+    return;
+  }
   if (message.type === "state") {
     let peer = network.peers.get(message.id);
     if (!peer) {
@@ -941,10 +979,10 @@ function handleNetworkMessage(message) {
       network.peers.set(message.id, peer);
       scene.add(peer.group);
     }
+    peer.playerName = message.playerName || peer.playerName || `P${message.id}`;
     peer.targetPosition.set(message.x ?? 0, (message.y ?? PLAYER_HEIGHT) - PLAYER_HEIGHT, message.z ?? 0);
     peer.targetRotation = message.ry ?? 0;
     peer.weaponIndex = message.weaponIndex ?? 0;
-    peer.label.textContent = `P${message.id}`;
     return;
   }
   if (message.type === "fire") {
@@ -956,6 +994,13 @@ function requestRoomList() {
   sendNetworkMessage({ type: "list-rooms" });
 }
 
+function getPlayerName() {
+  const name = (playerNameInput.value || "Slayer").trim().replace(/\s+/g, " ").slice(0, 20) || "Slayer";
+  playerNameInput.value = name;
+  network.playerName = name;
+  return name;
+}
+
 function createNetworkRoom() {
   if (!network.connected) {
     roomStatus.textContent = "Network server is offline. Start start.bat or npm run net.";
@@ -963,7 +1008,8 @@ function createNetworkRoom() {
   }
   sendNetworkMessage({
     type: "create-room",
-    name: roomNameInput.value || "Iron Arena"
+    name: roomNameInput.value || "Iron Arena",
+    playerName: getPlayerName()
   });
 }
 
@@ -972,7 +1018,7 @@ function joinNetworkRoom(roomId) {
     roomStatus.textContent = "Network server is offline.";
     return;
   }
-  sendNetworkMessage({ type: "join-room", roomId });
+  sendNetworkMessage({ type: "join-room", roomId, playerName: getPlayerName() });
 }
 
 function updateRoomStatus() {
@@ -981,10 +1027,10 @@ function updateRoomStatus() {
     return;
   }
   if (network.roomId) {
-    roomStatus.textContent = `Connected to "${network.roomName}" as P${network.id}. Press Enter the Citadel to play in this room.`;
+    roomStatus.textContent = `Connected to "${network.roomName}" as ${network.playerName}. Press Enter the Citadel to play in this room.`;
     return;
   }
-  roomStatus.textContent = `Connected as P${network.id ?? "?"}. Create or join a room, or press Enter the Citadel for solo.`;
+  roomStatus.textContent = `Connected as ${getPlayerName()}. Create or join a room, or press Enter the Citadel for solo.`;
 }
 
 function renderRoomList() {
@@ -1052,10 +1098,17 @@ function resetRoomGame(seed) {
   state.jumpOffset = 0;
   state.grounded = true;
   controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
+  spawnQueue.length = 0;
+  spawnDripTimer = 0;
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
+  sparks.splice(0).forEach((spark) => releaseSpark(spark.mesh));
+  decals.splice(0).forEach((decal) => {
+    scene.remove(decal.mesh);
+    decal.mesh.material.dispose();
+  });
   spawnWave();
 }
 
@@ -1088,7 +1141,8 @@ function createRemotePlayer(id) {
     labelTexture,
     targetPosition: new THREE.Vector3(),
     targetRotation: 0,
-    weaponIndex: 0
+    weaponIndex: 0,
+    playerName: `P${id}`
   };
 }
 
@@ -1100,7 +1154,7 @@ function drawPeerLabel(peer) {
   ctx.fillStyle = "#55e6c7";
   ctx.font = "bold 18px sans-serif";
   ctx.textAlign = "center";
-  ctx.fillText(`P${peer.id}`, 64, 22);
+  ctx.fillText(peer.playerName || `P${peer.id}`, 64, 22);
   peer.labelTexture.needsUpdate = true;
 }
 
@@ -1139,7 +1193,8 @@ function updateNetwork(delta) {
     y: pos.y,
     z: pos.z,
     ry: controls.getObject().rotation.y,
-    weaponIndex: state.weaponIndex
+    weaponIndex: state.weaponIndex,
+    playerName: getPlayerName()
   });
 }
 
@@ -1259,6 +1314,8 @@ function runConsoleCommand(rawCommand) {
     return;
   }
   if (command === "killall") {
+    spawnQueue.length = 0;
+    spawnDripTimer = 0;
     enemies.splice(0).forEach((enemy) => {
       makeScorch(enemy.group.position, 0xff4a18);
       scene.remove(enemy.group);
@@ -1270,6 +1327,8 @@ function runConsoleCommand(rawCommand) {
   if (command === "wave") {
     const wave = Math.max(1, Math.min(99, Number(args[0]) || state.wave));
     state.wave = wave;
+    spawnQueue.length = 0;
+    spawnDripTimer = 0;
     enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
     spawnWave();
     logConsole(`wave ${wave} spawned`, "ok");
@@ -1278,8 +1337,8 @@ function runConsoleCommand(rawCommand) {
   if (command === "spawn") {
     const type = ENEMY_TYPES.includes(args[0]) ? args[0] : "raider";
     const count = Math.max(1, Math.min(20, Number(args[1]) || 1));
-    for (let i = 0; i < count; i += 1) spawnEnemy(type, i);
-    logConsole(`spawned ${count} ${type}`, "ok");
+    for (let i = 0; i < count; i += 1) queueEnemySpawn(type, i);
+    logConsole(`queued ${count} ${type}`, "ok");
     return;
   }
   if (command === "nocd") {
@@ -1342,6 +1401,8 @@ function restart() {
   state.boostX = 0;
   state.boostZ = 0;
   state.spawnTimer = 0;
+  spawnQueue.length = 0;
+  spawnDripTimer = 0;
   controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
@@ -1355,9 +1416,21 @@ function restart() {
 function spawnWave() {
   const waveCount = Math.min(6 + state.wave * 2, MAX_ENEMIES);
   for (let i = 0; i < waveCount; i += 1) {
-    const type = pickEnemyType();
-    spawnEnemy(type, i);
+    queueEnemySpawn(pickEnemyType(), i);
   }
+}
+
+function queueEnemySpawn(type, index = 0) {
+  spawnQueue.push({ type, index });
+}
+
+function processSpawnQueue(delta) {
+  if (!spawnQueue.length) return;
+  spawnDripTimer -= delta;
+  if (spawnDripTimer > 0) return;
+  const next = spawnQueue.shift();
+  spawnEnemy(next.type, next.index);
+  spawnDripTimer = SPAWN_DRIP_DELAY;
 }
 
 function pickEnemyType() {
@@ -1381,7 +1454,8 @@ function spawnEnemy(type, index = 0) {
   const angle = gameRandom() * Math.PI * 2 + index * 0.35;
   const radius = 26 + gameRandom() * 11;
   const enemy = createEnemy(type);
-  enemy.group.position.set(Math.sin(angle) * radius, 0.08, Math.cos(angle) * radius);
+  enemy.group.position.set(Math.sin(angle) * radius, -1.35, Math.cos(angle) * radius);
+  enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
   scene.add(enemy.group);
   enemies.push(enemy);
@@ -1610,6 +1684,7 @@ function createEnemy(type) {
     attackRange: stats.attackRange,
     ranged: stats.ranged,
     boltColor: stats.glow,
+    spawnProgress: 0,
     attackTimer: 0.9 + gameRandom() * 1.1,
     bob: gameRandom() * Math.PI * 2,
     dead: false
@@ -1732,8 +1807,9 @@ function updateTimers(delta) {
   state.invulnerable = Math.max(0, state.invulnerable - delta);
   state.spawnTimer = Math.max(0, state.spawnTimer - delta);
   muzzleLight.intensity = THREE.MathUtils.damp(muzzleLight.intensity, 0, 18, delta);
+  processSpawnQueue(delta);
 
-  if (enemies.length === 0 && state.alive) {
+  if (enemies.length === 0 && spawnQueue.length === 0 && state.alive) {
     state.nextWaveAt += delta;
     if (state.nextWaveAt > 2.2) {
       state.wave += 1;
@@ -1745,9 +1821,9 @@ function updateTimers(delta) {
     state.nextWaveAt = 0;
   }
 
-  if (state.spawnTimer <= 0 && enemies.length < Math.min(4 + state.wave, MAX_ENEMIES) && state.wave > 2) {
+  if (state.spawnTimer <= 0 && spawnQueue.length === 0 && enemies.length < Math.min(4 + state.wave, MAX_ENEMIES) && state.wave > 2) {
     state.spawnTimer = 4.6 - Math.min(state.wave * 0.15, 1.6);
-    spawnEnemy(pickEnemyType());
+    queueEnemySpawn(pickEnemyType());
   }
 }
 
@@ -1840,7 +1916,18 @@ function updateEnemies(delta) {
     enemy.bob += delta * (enemy.type === "wraith" ? 6 : 3.5);
 
     enemy.group.rotation.y = Math.atan2(dirX, dirZ);
+    if (enemy.spawnProgress < 1) {
+      enemy.spawnProgress = Math.min(1, enemy.spawnProgress + delta / ENEMY_EMERGE_TIME);
+      const emerge = 1 - Math.pow(1 - enemy.spawnProgress, 3);
+      enemy.group.position.y = THREE.MathUtils.lerp(-1.35, 0.08, emerge);
+      enemy.group.scale.setScalar(THREE.MathUtils.lerp(0.62, 1, emerge));
+      enemy.body.rotation.x = Math.sin(enemy.bob) * 0.025;
+      enemy.body.rotation.z = Math.cos(enemy.bob * 0.7) * 0.03;
+      continue;
+    }
+
     enemy.group.position.y = 0.08;
+    enemy.group.scale.setScalar(1);
     enemy.body.rotation.x = Math.sin(enemy.bob) * 0.04;
     enemy.body.rotation.z = Math.cos(enemy.bob * 0.7) * 0.05;
 
@@ -1978,9 +2065,9 @@ function updateEffects(delta) {
     spark.life -= delta;
     spark.mesh.position.addScaledVector(spark.velocity, delta);
     spark.velocity.y -= 8 * delta;
-    spark.mesh.material.opacity = Math.max(0, spark.life / spark.maxLife);
+    spark.mesh.scale.setScalar(spark.size * Math.max(0, spark.life / spark.maxLife));
     if (spark.life <= 0) {
-      scene.remove(spark.mesh);
+      releaseSpark(spark.mesh);
       sparks.splice(i, 1);
     }
   }
@@ -1990,6 +2077,7 @@ function updateEffects(delta) {
     decals[i].mesh.material.opacity = Math.max(0, decals[i].ttl / 7) * 0.35;
     if (decals[i].ttl <= 0) {
       scene.remove(decals[i].mesh);
+      decals[i].mesh.material.dispose();
       decals.splice(i, 1);
     }
   }
@@ -2081,7 +2169,7 @@ function killEnemy(enemy, index) {
 }
 
 function shootEnemyBolt(enemy, dirX, dirZ) {
-  const mesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.32, 0), materials.lava);
+  const mesh = new THREE.Mesh(geometries.enemyBolt, materials.lava);
   mesh.position.copy(enemy.group.position).add(new THREE.Vector3(0, 2.0, 0));
   scene.add(mesh);
   enemyBolts.push({
@@ -2131,11 +2219,11 @@ function dropWeapon(position, weaponIndex) {
   const weapon = WEAPONS[weaponIndex];
   const mat =
     weapon.color === 0xff4a18 ? materials.lava : weapon.color === 0xb48cff ? materials.void : materials.rune;
-  const core = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.22, 0.42), mat);
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.11, 0.9, 8), materials.metal);
+  const core = new THREE.Mesh(geometries.weaponPickupCore, mat);
+  const barrel = new THREE.Mesh(geometries.weaponPickupBarrel, materials.metal);
   barrel.rotation.z = Math.PI / 2;
   barrel.position.x = 0.48;
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.035, 8, 18), mat);
+  const ring = new THREE.Mesh(geometries.weaponPickupRing, mat);
   ring.rotation.y = Math.PI / 2;
   ring.position.x = -0.34;
   group.add(core, barrel, ring);
@@ -2152,7 +2240,8 @@ function makeScorch(position, color) {
     opacity: 0.35,
     depthWrite: false
   });
-  const mesh = new THREE.Mesh(new THREE.CircleGeometry(1.1 + Math.random() * 0.9, 16), material);
+  const mesh = new THREE.Mesh(geometries.scorch, material);
+  mesh.scale.setScalar(1.1 + Math.random() * 0.9);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.copy(position).setY(0.035);
   mesh.rotation.z = Math.random() * Math.PI;
@@ -2160,21 +2249,48 @@ function makeScorch(position, color) {
   decals.push({ mesh, ttl: 7 });
 }
 
+function sparkMaterial(color) {
+  const key = new THREE.Color(color).getHex();
+  if (!sparkMaterials.has(key)) {
+    sparkMaterials.set(
+      key,
+      new THREE.MeshBasicMaterial({
+        color: key,
+        transparent: true,
+        opacity: 0.95
+      })
+    );
+  }
+  return sparkMaterials.get(key);
+}
+
+function takeSpark(color) {
+  const mesh = sparkPool.pop() ?? new THREE.Mesh(geometries.spark, sparkMaterial(color));
+  mesh.material = sparkMaterial(color);
+  mesh.visible = true;
+  scene.add(mesh);
+  return mesh;
+}
+
+function releaseSpark(mesh) {
+  scene.remove(mesh);
+  mesh.visible = false;
+  if (sparkPool.length < MAX_SPARK_POOL) sparkPool.push(mesh);
+}
+
 function spawnMuzzleSparks(origin, direction, count, color) {
   for (let i = 0; i < count; i += 1) {
-    const mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.035 + Math.random() * 0.055, 6, 4),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 })
-    );
+    const size = 0.035 + Math.random() * 0.055;
+    const mesh = takeSpark(color);
+    mesh.scale.setScalar(size);
     mesh.position.copy(origin);
-    scene.add(mesh);
     const side = new THREE.Vector3(
       (Math.random() - 0.5) * 1.9,
       (Math.random() - 0.15) * 1.2,
       (Math.random() - 0.5) * 1.9
     );
     const velocity = direction.clone().multiplyScalar(2 + Math.random() * 7).add(side);
-    sparks.push({ mesh, velocity, life: 0.25 + Math.random() * 0.42, maxLife: 0.68 });
+    sparks.push({ mesh, velocity, life: 0.25 + Math.random() * 0.42, maxLife: 0.68, size });
   }
 }
 
