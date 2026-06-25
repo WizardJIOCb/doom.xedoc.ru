@@ -94,6 +94,7 @@ const pickups = [];
 const sparks = [];
 const embers = [];
 const decals = [];
+const ragdolls = [];
 const hazards = [];
 const jumpPads = [];
 const remoteProjectiles = [];
@@ -173,6 +174,7 @@ const sparkMaterials = new Map();
 const sparkPool = [];
 const spawnQueue = [];
 const MAX_SPARK_POOL = 220;
+const MAX_RAGDOLL_PARTS = 120;
 const SPAWN_DRIP_DELAY = 0.14;
 const ENEMY_EMERGE_TIME = 0.65;
 
@@ -189,6 +191,7 @@ window.ironCitadelDebug = {
   network,
   weapons: WEAPONS,
   enemies,
+  ragdolls,
   controls,
   isEnemyHost
 };
@@ -741,12 +744,18 @@ function createEmbers() {
 
 function bindEvents() {
   startButton.addEventListener("click", () => {
-    startGame();
+    if (!state.alive) {
+      restart();
+    } else {
+      startGame();
+    }
   });
   createRoomButton.addEventListener("click", () => {
+    if (isLobbyHidden()) return;
     createNetworkRoom();
   });
   refreshRoomsButton.addEventListener("click", () => {
+    if (isLobbyHidden()) return;
     requestRoomList();
   });
 
@@ -769,6 +778,7 @@ function bindEvents() {
       selectWeapon(weaponNumber - 1);
     }
     if (event.code === "Space") {
+      if (state.started) event.preventDefault();
       jump();
     }
     if (event.code === "KeyQ") {
@@ -780,6 +790,9 @@ function bindEvents() {
   });
 
   document.addEventListener("keyup", (event) => {
+    if (!isTextEntryActive(event.target) && state.started && event.code === "Space") {
+      event.preventDefault();
+    }
     keys.delete(event.code);
   });
 
@@ -876,6 +889,17 @@ function isTextEntryActive(target) {
   if (!element) return false;
   if (element.isContentEditable) return true;
   return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
+}
+
+function isLobbyHidden() {
+  return overlay.classList.contains("hidden");
+}
+
+function releaseMenuFocus() {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && overlay.contains(active)) {
+    active.blur();
+  }
 }
 
 function initNetwork() {
@@ -1045,6 +1069,7 @@ function createNetworkRoom() {
 }
 
 function joinNetworkRoom(roomId) {
+  if (isLobbyHidden()) return;
   if (!network.connected) {
     roomStatus.textContent = "Network server is offline.";
     return;
@@ -1058,7 +1083,7 @@ function updateRoomStatus() {
     return;
   }
   if (network.roomId) {
-    roomStatus.textContent = `Connected to "${network.roomName}" as ${network.playerName}. Press Enter the Citadel to play in this room.`;
+    roomStatus.textContent = `Connected to "${network.roomName}" as ${network.playerName}. Battle is live in this room.`;
     return;
   }
   roomStatus.textContent = `Connected as ${getPlayerName()}. Create or join a room, or press Enter the Citadel for solo.`;
@@ -1159,6 +1184,7 @@ function resetRoomGame(seed) {
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
   sparks.splice(0).forEach((spark) => releaseSpark(spark.mesh));
+  clearRagdolls();
   decals.splice(0).forEach((decal) => {
     scene.remove(decal.mesh);
     decal.mesh.material.dispose();
@@ -1248,6 +1274,7 @@ function applyEnemyState(message) {
   for (let i = enemies.length - 1; i >= 0; i -= 1) {
     const enemy = enemies[i];
     if (!seen.has(String(enemy.netId))) {
+      spawnEnemyRagdoll(enemy, 0.82);
       scene.remove(enemy.group);
       enemiesById.delete(String(enemy.netId));
       enemies.splice(i, 1);
@@ -1339,6 +1366,7 @@ function spawnRemoteShot(message) {
 }
 
 function startGame() {
+  releaseMenuFocus();
   if (!state.started) {
     state.started = true;
     if (!network.roomId && isEnemyHost() && enemies.length === 0 && spawnQueue.length === 0 && state.wave === 1 && state.kills === 0) {
@@ -1446,6 +1474,7 @@ function runConsoleCommand(rawCommand) {
     spawnQueue.length = 0;
     spawnDripTimer = 0;
     enemies.splice(0).forEach((enemy) => {
+      spawnEnemyRagdoll(enemy, 1.15);
       makeScorch(enemy.group.position, 0xff4a18);
       scene.remove(enemy.group);
       enemiesById.delete(String(enemy.netId));
@@ -1461,6 +1490,7 @@ function runConsoleCommand(rawCommand) {
     spawnDripTimer = 0;
     enemiesById.clear();
     enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
+    clearRagdolls();
     spawnWave();
     logConsole(`wave ${wave} spawned`, "ok");
     return;
@@ -1532,16 +1562,19 @@ function restart() {
   state.boostX = 0;
   state.boostZ = 0;
   state.spawnTimer = 0;
+  keys.clear();
   nextEnemyId = 1;
   spawnQueue.length = 0;
   spawnDripTimer = 0;
   controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
   enemiesById.clear();
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
+  clearRagdolls();
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
   if (isEnemyHost()) spawnWave();
+  startButton.textContent = "Return to Battle";
   overlay.classList.add("hidden");
   if (!isTouchDevice()) controls.lock();
 }
@@ -2229,6 +2262,37 @@ function updateEffects(delta) {
     }
   }
 
+  for (let i = ragdolls.length - 1; i >= 0; i -= 1) {
+    const part = ragdolls[i];
+    part.ttl -= delta;
+    part.velocity.y -= 18 * delta;
+    part.mesh.position.addScaledVector(part.velocity, delta);
+    part.mesh.rotation.x += part.spin.x * delta;
+    part.mesh.rotation.y += part.spin.y * delta;
+    part.mesh.rotation.z += part.spin.z * delta;
+
+    if (part.mesh.position.y < part.floorY) {
+      part.mesh.position.y = part.floorY;
+      if (Math.abs(part.velocity.y) > 1.2) {
+        part.velocity.y = Math.abs(part.velocity.y) * 0.22;
+        part.spin.multiplyScalar(0.58);
+      } else {
+        part.velocity.y = 0;
+        part.spin.multiplyScalar(0.78);
+      }
+      part.velocity.x *= 0.78;
+      part.velocity.z *= 0.78;
+    } else {
+      part.velocity.x *= Math.exp(-0.45 * delta);
+      part.velocity.z *= Math.exp(-0.45 * delta);
+    }
+
+    if (part.ttl <= 0) {
+      scene.remove(part.mesh);
+      ragdolls.splice(i, 1);
+    }
+  }
+
   for (let i = decals.length - 1; i >= 0; i -= 1) {
     decals[i].ttl -= delta;
     decals[i].mesh.material.opacity = Math.max(0, decals[i].ttl / 7) * 0.35;
@@ -2308,6 +2372,10 @@ function damagePlayer(amount) {
   }
 }
 
+function clearRagdolls() {
+  ragdolls.splice(0).forEach((part) => scene.remove(part.mesh));
+}
+
 function die() {
   state.alive = false;
   state.health = 0;
@@ -2324,9 +2392,61 @@ function killEnemy(enemy, index) {
   maybeDrop(enemy.group.position);
   makeScorch(enemy.group.position, enemy.type === "wraith" ? 0x20c8a4 : 0xff3218);
   spawnMuzzleSparks(enemy.group.position.clone().setY(1.6), worldUp, enemy.type === "brute" ? 44 : 28, enemy.type === "wraith" ? 0x5fffe0 : 0xff5a1d);
+  spawnEnemyRagdoll(enemy);
   scene.remove(enemy.group);
   enemiesById.delete(String(enemy.netId));
   enemies.splice(index, 1);
+}
+
+function spawnEnemyRagdoll(enemy, force = 1) {
+  enemy.group.updateMatrixWorld(true);
+  const origin = enemy.group.position;
+  const playerPos = controls.getObject().position;
+  const away = new THREE.Vector3(origin.x - playerPos.x, 0, origin.z - playerPos.z);
+  if (away.lengthSq() < 0.001) away.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+  away.normalize();
+
+  const parts = [];
+  enemy.group.traverse((child) => {
+    if (!child.isMesh || child.material === materials.shadow || child.geometry?.type === "CircleGeometry") return;
+    parts.push(child);
+  });
+
+  for (const child of parts) {
+    if (ragdolls.length >= MAX_RAGDOLL_PARTS) {
+      const oldest = ragdolls.shift();
+      if (oldest) scene.remove(oldest.mesh);
+    }
+
+    const mesh = new THREE.Mesh(child.geometry, child.material);
+    child.matrixWorld.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    mesh.castShadow = child.castShadow;
+    mesh.receiveShadow = child.receiveShadow;
+    scene.add(mesh);
+
+    child.geometry.computeBoundingBox();
+    const bounds = child.geometry.boundingBox;
+    const height = bounds ? (bounds.max.y - bounds.min.y) * Math.abs(mesh.scale.y) : 0.4;
+    const sideKick = (Math.random() - 0.5) * 6.5 * force;
+    const launch = 4.5 + Math.random() * 7.5;
+    const velocity = new THREE.Vector3(
+      away.x * (4.5 + Math.random() * 6) * force + sideKick,
+      launch * force,
+      away.z * (4.5 + Math.random() * 6) * force + (Math.random() - 0.5) * 6.5 * force
+    );
+    const spin = new THREE.Vector3(
+      (Math.random() - 0.5) * 12,
+      (Math.random() - 0.5) * 16,
+      (Math.random() - 0.5) * 12
+    );
+    ragdolls.push({
+      mesh,
+      velocity,
+      spin,
+      floorY: Math.max(0.06, Math.min(0.55, height * 0.42)),
+      ttl: 4.2 + Math.random() * 1.8
+    });
+  }
 }
 
 function shootEnemyBolt(enemy, dirX, dirZ) {
