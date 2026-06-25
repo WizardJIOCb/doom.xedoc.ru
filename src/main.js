@@ -1002,8 +1002,8 @@ function handleNetworkMessage(message) {
     }
     peer.playerName = message.playerName || peer.playerName || `P${message.id}`;
     peer.targetPosition.set(message.x ?? 0, (message.y ?? PLAYER_HEIGHT) - PLAYER_HEIGHT, message.z ?? 0);
-    const fallbackRotation = Number.isFinite(message.ry) ? message.ry + Math.PI : peer.targetRotation;
-    const rawTargetRotation = lookAngle(message.lx, message.lz, fallbackRotation);
+    const fallbackRotation = Number.isFinite(message.ry) ? message.ry : peer.targetRotation;
+    const rawTargetRotation = lookAngle(message.lx, message.lz, fallbackRotation - Math.PI) + Math.PI;
     peer.targetRotation = unwrapAngle(peer.targetRotation, rawTargetRotation);
     const visualRotationError = Math.abs(
       THREE.MathUtils.euclideanModulo(peer.targetRotation - peer.group.rotation.y + Math.PI, Math.PI * 2) - Math.PI
@@ -1172,21 +1172,21 @@ function createRemotePlayer(id) {
   body.position.y = 1.1;
   body.castShadow = true;
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.34, 0.12), materials.lava);
-  chest.position.set(0, 1.42, 0.3);
+  chest.position.set(0, 1.42, -0.3);
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.48, 0.5), materials.gold);
   head.position.y = 2.0;
   head.castShadow = true;
   const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.055), materials.rune);
-  visor.position.set(0, 2.05, 0.285);
+  visor.position.set(0, 2.05, -0.285);
   const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 4), materials.rune);
-  nose.position.set(0, 1.92, 0.42);
-  nose.rotation.x = Math.PI / 2;
+  nose.position.set(0, 1.92, -0.42);
+  nose.rotation.x = -Math.PI / 2;
   const leftShoulder = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.18), materials.bone);
   leftShoulder.position.set(-0.55, 1.22, 0.02);
   const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.9), materials.rune);
-  weapon.position.set(0.58, 1.26, 0.44);
+  weapon.position.set(0.58, 1.26, -0.44);
   const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.1), materials.gold);
-  muzzle.position.set(0.58, 1.26, 0.94);
+  muzzle.position.set(0.58, 1.26, -0.94);
   const labelCanvas = document.createElement("canvas");
   labelCanvas.width = 128;
   labelCanvas.height = 32;
