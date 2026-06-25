@@ -52,6 +52,24 @@ function roomBroadcast(roomId, senderId, payload) {
   }
 }
 
+function roomBroadcastAll(roomId, payload) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+  for (const id of room.players) {
+    const socket = clients.get(id);
+    if (socket) send(socket, payload);
+  }
+}
+
+function transferHost(room, previousHostId) {
+  const nextHostId = [...room.players].find((id) => id !== previousHostId);
+  if (!nextHostId) return false;
+  room.hostId = nextHostId;
+  roomBroadcastAll(room.id, { type: "host-changed", hostId: room.hostId });
+  broadcastRoomList();
+  return true;
+}
+
 function leaveRoom(id) {
   const socket = clients.get(id);
   const roomId = socket?.roomId;
@@ -65,8 +83,7 @@ function leaveRoom(id) {
     if (room.players.size === 0) {
       rooms.delete(roomId);
     } else if (wasHost) {
-      room.hostId = room.players.values().next().value;
-      roomBroadcast(roomId, id, { type: "host-changed", hostId: room.hostId });
+      transferHost(room, id);
     }
   }
   socket.roomId = null;
@@ -138,8 +155,18 @@ wss.on("connection", (socket) => {
         return;
       }
 
+      if (message.type === "host-dead") {
+        const room = rooms.get(socket.roomId);
+        if (room?.hostId === id) transferHost(room, id);
+        return;
+      }
+
       if (!socket.roomId) {
         send(socket, { type: "room-error", message: "Create or join a room first" });
+        return;
+      }
+
+      if (message.type === "enemy-state" && rooms.get(socket.roomId)?.hostId !== id) {
         return;
       }
 

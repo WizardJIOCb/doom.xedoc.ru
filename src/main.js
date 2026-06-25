@@ -951,6 +951,7 @@ function handleNetworkMessage(message) {
     network.statusEl.textContent = network.roomName ? `ROOM ${network.roomName}` : `NET #${network.id}`;
     updateRoomStatus();
     requestRoomList();
+    startGame();
     return;
   }
   if (message.type === "room-left") {
@@ -970,6 +971,9 @@ function handleNetworkMessage(message) {
   if (message.type === "host-changed") {
     network.hostId = message.hostId ?? network.hostId;
     network.statusEl.textContent = isEnemyHost() ? "NET HOST" : `HOST P${network.hostId}`;
+    if (isEnemyHost() && state.started && enemies.length === 0 && spawnQueue.length === 0 && state.wave === 1 && state.kills === 0) {
+      spawnWave();
+    }
     return;
   }
   if (!message.id || message.id === network.id) return;
@@ -989,14 +993,22 @@ function handleNetworkMessage(message) {
   }
   if (message.type === "state") {
     let peer = network.peers.get(message.id);
+    let isNewPeer = false;
     if (!peer) {
       peer = createRemotePlayer(message.id);
       network.peers.set(message.id, peer);
       scene.add(peer.group);
+      isNewPeer = true;
     }
     peer.playerName = message.playerName || peer.playerName || `P${message.id}`;
     peer.targetPosition.set(message.x ?? 0, (message.y ?? PLAYER_HEIGHT) - PLAYER_HEIGHT, message.z ?? 0);
-    peer.targetRotation = (message.ry ?? 0) + Math.PI;
+    const fallbackRotation = Number.isFinite(message.ry) ? message.ry + Math.PI : peer.targetRotation;
+    const rawTargetRotation = lookAngle(message.lx, message.lz, fallbackRotation);
+    peer.targetRotation = unwrapAngle(peer.targetRotation, rawTargetRotation);
+    const visualRotationError = Math.abs(
+      THREE.MathUtils.euclideanModulo(peer.targetRotation - peer.group.rotation.y + Math.PI, Math.PI * 2) - Math.PI
+    );
+    if (isNewPeer || visualRotationError > 1) peer.group.rotation.y = peer.targetRotation;
     peer.weaponIndex = message.weaponIndex ?? 0;
     return;
   }
@@ -1106,6 +1118,18 @@ function dampAngle(current, target, lambda, delta) {
   return current + diff * (1 - Math.exp(-lambda * delta));
 }
 
+function unwrapAngle(reference, angle) {
+  const diff = THREE.MathUtils.euclideanModulo(angle - reference + Math.PI, Math.PI * 2) - Math.PI;
+  return reference + diff;
+}
+
+function lookAngle(lookX, lookZ, fallback) {
+  if (Number.isFinite(lookX) && Number.isFinite(lookZ) && Math.hypot(lookX, lookZ) > 0.001) {
+    return Math.atan2(lookX, lookZ);
+  }
+  return fallback;
+}
+
 function gameRandom() {
   gameSeed = (gameSeed * 1664525 + 1013904223) >>> 0;
   return gameSeed / 4294967296;
@@ -1144,16 +1168,25 @@ function resetRoomGame(seed) {
 
 function createRemotePlayer(id) {
   const group = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.35, 0.55), materials.metal);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.78, 1.25, 0.48), materials.metal);
   body.position.y = 1.1;
   body.castShadow = true;
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.48, 0.52), materials.gold);
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.34, 0.12), materials.lava);
+  chest.position.set(0, 1.42, 0.3);
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.48, 0.5), materials.gold);
   head.position.y = 2.0;
   head.castShadow = true;
-  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.08, 0.04), materials.rune);
-  visor.position.set(0, 2.04, 0.28);
-  const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.82, 0.16, 0.22), materials.rune);
-  weapon.position.set(0.55, 1.28, 0.12);
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.055), materials.rune);
+  visor.position.set(0, 2.05, 0.285);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 4), materials.rune);
+  nose.position.set(0, 1.92, 0.42);
+  nose.rotation.x = Math.PI / 2;
+  const leftShoulder = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.62, 0.18), materials.bone);
+  leftShoulder.position.set(-0.55, 1.22, 0.02);
+  const weapon = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.9), materials.rune);
+  weapon.position.set(0.58, 1.26, 0.44);
+  const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.1), materials.gold);
+  muzzle.position.set(0.58, 1.26, 0.94);
   const labelCanvas = document.createElement("canvas");
   labelCanvas.width = 128;
   labelCanvas.height = 32;
@@ -1161,7 +1194,7 @@ function createRemotePlayer(id) {
   const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: labelTexture, transparent: true }));
   label.position.y = 2.75;
   label.scale.set(1.8, 0.45, 1);
-  group.add(body, head, visor, weapon, label);
+  group.add(body, chest, head, visor, nose, leftShoulder, weapon, muzzle, label);
   return {
     id,
     group,
@@ -1251,7 +1284,7 @@ function sendNetworkMessage(payload) {
 function updateNetwork(delta) {
   for (const peer of network.peers.values()) {
     peer.group.position.lerp(peer.targetPosition, 1 - Math.pow(0.001, delta));
-    peer.group.rotation.y = dampAngle(peer.group.rotation.y, peer.targetRotation, 14, delta);
+    peer.group.rotation.y = dampAngle(peer.group.rotation.y, peer.targetRotation, 45, delta);
     peer.weapon.material = weaponMaterial(WEAPONS[peer.weaponIndex] ?? WEAPONS[0]);
     drawPeerLabel(peer);
   }
@@ -1277,12 +1310,15 @@ function updateNetwork(delta) {
   if (!network.connected || !network.roomId || network.lastSend < 0.05 || !state.started) return;
   network.lastSend = 0;
   const pos = controls.getObject().position;
+  const lookYaw = controls.getObject().rotation.y - Math.PI;
   sendNetworkMessage({
     type: "state",
     x: pos.x,
     y: pos.y,
     z: pos.z,
     ry: controls.getObject().rotation.y,
+    lx: Math.sin(lookYaw),
+    lz: Math.cos(lookYaw),
     weaponIndex: state.weaponIndex,
     playerName: getPlayerName()
   });
@@ -1553,7 +1589,7 @@ function spawnEnemy(type, index = 0) {
   const angle = gameRandom() * Math.PI * 2 + index * 0.35;
   const radius = 26 + gameRandom() * 11;
   const enemy = createEnemy(type);
-  enemy.netId = String(nextEnemyId++);
+  enemy.netId = `${network.id ?? "local"}-${nextEnemyId++}`;
   enemy.group.position.set(Math.sin(angle) * radius, -1.35, Math.cos(angle) * radius);
   enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
@@ -2275,6 +2311,9 @@ function damagePlayer(amount) {
 function die() {
   state.alive = false;
   state.health = 0;
+  if (network.roomId && isEnemyHost()) {
+    sendNetworkMessage({ type: "host-dead" });
+  }
   overlay.classList.remove("hidden");
   startButton.textContent = "Rise Again";
   if (controls.isLocked) controls.unlock();
