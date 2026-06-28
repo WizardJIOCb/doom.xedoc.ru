@@ -533,6 +533,10 @@ button {
 }
 
 .ability-card {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  justify-self: stretch;
   min-height: 150px;
   border: 1px solid rgba(248, 198, 112, 0.46);
   border-radius: 6px;
@@ -543,6 +547,27 @@ button {
   cursor: pointer;
 }
 
+.level-up-overlay .ability-card {
+  min-width: 0;
+}
+
+.ability-card kbd {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid rgba(85, 230, 199, 0.6);
+  border-radius: 4px;
+  color: #55e6c7;
+  background: rgba(7, 6, 5, 0.7);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 950;
+  line-height: 26px;
+  text-align: center;
+}
+
 .ability-card strong,
 .ability-card span,
 .ability-card small {
@@ -550,6 +575,7 @@ button {
 }
 
 .ability-card strong {
+  padding-right: 34px;
   font-size: 0.95rem;
   text-transform: uppercase;
 }

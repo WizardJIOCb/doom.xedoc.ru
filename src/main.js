@@ -389,6 +389,7 @@ const state = {
   combatXpNext: 80,
   pendingLevelUps: 0,
   levelUpOpen: false,
+  abilityChoices: [],
   abilityRanks: {},
   abilityCooldowns: {},
   nextWaveAt: 0,
@@ -436,6 +437,7 @@ let gameSeed = 1;
 let nextEnemyId = 1;
 let selectedArena = ARENAS[0];
 let profile = loadProfile();
+let lastPointerUnlockAt = 0;
 
 const input = {
   x: 0,
@@ -1397,6 +1399,14 @@ function bindEvents() {
     }
     if (state.consoleOpen) return;
     if (event.repeat) return;
+    if (state.levelUpOpen) {
+      const abilityNumber = getAbilityChoiceNumber(event);
+      if (abilityNumber) {
+        event.preventDefault();
+        chooseAbilityByIndex(abilityNumber - 1);
+      }
+      return;
+    }
     keys.add(event.code);
     if (event.code === "KeyR" && state.alive && state.ammo < AMMO_MAX) {
       state.ammo = Math.min(AMMO_MAX, state.ammo + 35);
@@ -1432,10 +1442,11 @@ function bindEvents() {
   });
 
   document.addEventListener("mousedown", (event) => {
+    if (state.levelUpOpen || levelUpOverlay.contains(event.target)) return;
     if (!state.started || !state.alive) return;
     if (event.button === 0) state.mouseFireHeld = true;
     if (!controls.isLocked && !isTouchDevice()) {
-      controls.lock();
+      tryLockControls();
       return;
     }
     if (event.button === 0) fire();
@@ -1463,12 +1474,19 @@ function bindEvents() {
   });
 
   controls.addEventListener("unlock", () => {
+    lastPointerUnlockAt = performance.now();
     state.mouseFireHeld = false;
     if (state.alive && state.started && !isTouchDevice() && !state.consoleOpen && !state.levelUpOpen) {
       overlay.classList.remove("hidden");
       startButton.textContent = "Return to Battle";
     }
   });
+
+  for (const eventName of ["pointerdown", "mousedown", "click"]) {
+    levelUpOverlay.addEventListener(eventName, (event) => {
+      event.stopPropagation();
+    });
+  }
 
   touchFire.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -1714,6 +1732,7 @@ function resetRunProgression() {
   state.combatXpNext = 80;
   state.pendingLevelUps = 0;
   state.levelUpOpen = false;
+  state.abilityChoices = [];
   state.abilityRanks = {};
   state.abilityCooldowns = {};
   levelUpOverlay.classList.add("hidden");
@@ -2306,7 +2325,51 @@ function startGame() {
     }
     overlay.classList.add("hidden");
   }
-  if (!isTouchDevice() && !controls.isLocked) controls.lock();
+  tryLockControls();
+}
+
+function tryLockControls() {
+  if (isTouchDevice() || controls.isLocked || state.levelUpOpen) return false;
+  if (performance.now() - lastPointerUnlockAt < 250) return false;
+  try {
+    const request = document.body.requestPointerLock();
+    if (request && typeof request.catch === "function") {
+      request.catch((error) => {
+        if (error?.name !== "SecurityError") console.warn(error);
+      });
+    }
+    return true;
+  } catch (error) {
+    if (error?.name !== "SecurityError") console.warn(error);
+    return false;
+  }
+}
+
+function unlockPointer() {
+  if (!document.pointerLockElement) return Promise.resolve();
+  lastPointerUnlockAt = performance.now();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("pointerlockchange", finish);
+      resolve();
+    };
+    document.addEventListener("pointerlockchange", finish, { once: true });
+    try {
+      const request = document.exitPointerLock();
+      if (request && typeof request.catch === "function") {
+        request.catch((error) => {
+          if (error?.name !== "SecurityError") console.warn(error);
+        }).finally(finish);
+      }
+    } catch (error) {
+      if (error?.name !== "SecurityError") console.warn(error);
+      finish();
+    }
+    window.setTimeout(finish, 180);
+  });
 }
 
 function getWeaponNumber(event) {
@@ -2316,17 +2379,22 @@ function getWeaponNumber(event) {
   return 0;
 }
 
+function getAbilityChoiceNumber(event) {
+  const number = getWeaponNumber(event);
+  return number >= 1 && number <= 3 ? number : 0;
+}
+
 function toggleConsole(force) {
   state.consoleOpen = typeof force === "boolean" ? force : !state.consoleOpen;
   cheatConsole.classList.toggle("hidden", !state.consoleOpen);
   if (state.consoleOpen) {
     overlay.classList.add("hidden");
-    if (controls.isLocked) controls.unlock();
+    unlockPointer();
     logConsole("Type help for cheats.", "ok");
     window.setTimeout(() => consoleInput.focus(), 0);
   } else {
     consoleInput.blur();
-    if (state.started && state.alive && !isTouchDevice()) controls.lock();
+    if (state.started && state.alive) tryLockControls();
   }
 }
 
@@ -2527,7 +2595,7 @@ function restart() {
   if (isEnemyHost()) spawnWave();
   startButton.textContent = "Return to Battle";
   overlay.classList.add("hidden");
-  if (!isTouchDevice()) controls.lock();
+  tryLockControls();
 }
 
 function spawnWave() {
@@ -2608,10 +2676,11 @@ function openLevelUp() {
   state.mouseFireHeld = false;
   state.touchFireHeld = false;
   overlay.classList.add("hidden");
-  if (controls.isLocked) controls.unlock();
+  levelUpOverlay.classList.add("hidden");
   levelUpTitle.textContent = `Level ${state.combatLevel}`;
   levelUpChoices.textContent = "";
   const choices = getAbilityChoices();
+  state.abilityChoices = choices.map((ability) => ability.key);
   if (!choices.length) {
     profile.essence += 50;
     saveProfile();
@@ -2619,25 +2688,31 @@ function openLevelUp() {
     state.armor = getMaxArmor();
     state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
     state.levelUpOpen = false;
+    state.abilityChoices = [];
     return;
   }
 
-  for (const ability of choices) {
+  for (const [index, ability] of choices.entries()) {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "ability-card";
+    card.dataset.choiceIndex = String(index);
+    const shortcut = document.createElement("kbd");
+    shortcut.textContent = String(index + 1);
     const title = document.createElement("strong");
     title.textContent = ability.name;
     const description = document.createElement("span");
     description.textContent = ability.description;
     const meta = document.createElement("small");
     meta.textContent = `${ability.type} / rank ${abilityRank(ability.key) + 1} of ${ability.maxRank}`;
-    card.append(title, description, meta);
+    card.append(shortcut, title, description, meta);
     card.addEventListener("click", () => chooseAbility(ability.key));
     levelUpChoices.appendChild(card);
   }
 
-  levelUpOverlay.classList.remove("hidden");
+  unlockPointer().finally(() => {
+    if (state.levelUpOpen) levelUpOverlay.classList.remove("hidden");
+  });
 }
 
 function chooseAbility(key) {
@@ -2645,6 +2720,7 @@ function chooseAbility(key) {
   if (!ability) return;
   state.abilityRanks[key] = Math.min((state.abilityRanks[key] ?? 0) + 1, ability.maxRank);
   state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
+  state.abilityChoices = [];
   levelUpOverlay.classList.add("hidden");
   state.levelUpOpen = false;
   state.health = Math.min(getMaxHealth(), state.health + (key === "vitalSurge" ? 20 : 8));
@@ -2653,8 +2729,15 @@ function chooseAbility(key) {
   if (state.pendingLevelUps > 0) {
     window.setTimeout(openLevelUp, 80);
   } else if (state.started && state.alive && !isTouchDevice()) {
-    controls.lock();
+    startButton.textContent = "Return to Battle";
+    overlay.classList.remove("hidden");
   }
+}
+
+function chooseAbilityByIndex(index) {
+  const key = state.abilityChoices[index];
+  if (!key) return;
+  chooseAbility(key);
 }
 
 function maybeQueueBossSpawn() {
@@ -4116,7 +4199,7 @@ function die() {
   }
   overlay.classList.remove("hidden");
   startButton.textContent = "Rise Again";
-  if (controls.isLocked) controls.unlock();
+  unlockPointer();
 }
 
 function killEnemy(enemy, index) {
