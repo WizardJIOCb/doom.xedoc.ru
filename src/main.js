@@ -11,12 +11,27 @@ const progressionStatus = document.querySelector("#progressionStatus");
 const levelUpOverlay = document.querySelector("#levelUpOverlay");
 const levelUpTitle = document.querySelector("#levelUpTitle");
 const levelUpChoices = document.querySelector("#levelUpChoices");
+const leaderboardOverlay = document.querySelector("#leaderboardOverlay");
+const leaderboardClose = document.querySelector("#leaderboardClose");
+const leaderboardRows = document.querySelector("#leaderboardRows");
+const leaderboardAccountTab = document.querySelector("#leaderboardAccountTab");
+const leaderboardKillsTab = document.querySelector("#leaderboardKillsTab");
+const leaderboardWealthTab = document.querySelector("#leaderboardWealthTab");
 const playerNameInput = document.querySelector("#playerNameInput");
 const roomNameInput = document.querySelector("#roomNameInput");
 const createRoomButton = document.querySelector("#createRoomButton");
 const refreshRoomsButton = document.querySelector("#refreshRoomsButton");
 const roomStatus = document.querySelector("#roomStatus");
 const roomList = document.querySelector("#roomList");
+const accountLabel = document.querySelector("#accountLabel");
+const profileSummary = document.querySelector("#profileSummary");
+const authNameInput = document.querySelector("#authNameInput");
+const authPasswordInput = document.querySelector("#authPasswordInput");
+const loginButton = document.querySelector("#loginButton");
+const registerButton = document.querySelector("#registerButton");
+const logoutButton = document.querySelector("#logoutButton");
+const leaderboardButton = document.querySelector("#leaderboardButton");
+const authStatus = document.querySelector("#authStatus");
 const healthText = document.querySelector("#healthText");
 const armorText = document.querySelector("#armorText");
 const healthBar = document.querySelector("#healthBar");
@@ -26,6 +41,8 @@ const killText = document.querySelector("#killText");
 const ammoText = document.querySelector("#ammoText");
 const weaponLabel = document.querySelector(".weapon span");
 const shieldCooldown = document.querySelector("#shieldCooldown");
+const scoreboard = document.querySelector("#scoreboard");
+const scoreboardRows = document.querySelector("#scoreboardRows");
 const damageVignette = document.querySelector("#damageVignette");
 const hitFlash = document.querySelector("#hitFlash");
 const cheatConsole = document.querySelector("#cheatConsole");
@@ -255,6 +272,7 @@ const ARENAS = [
 ];
 const ARENA_BY_KEY = new Map(ARENAS.map((arena) => [arena.key, arena]));
 const PROFILE_KEY = "ironCitadelProgressV1";
+const AUTH_KEY = "ironCitadelAuthV1";
 const CHARACTERS = [
   {
     key: "vanguard",
@@ -427,6 +445,8 @@ const state = {
   ownedWeapons: WEAPONS.map(() => true),
   weaponIndex: 0,
   kills: 0,
+  sessionKills: 0,
+  deaths: 0,
   nextBossKill: BOSS_KILL_INTERVAL,
   bossIndex: 0,
   wave: 1,
@@ -462,7 +482,8 @@ const state = {
   touchLookActive: false,
   mouseFireHeld: false,
   touchFireHeld: false,
-  touchShieldHeld: false
+  touchShieldHeld: false,
+  scoreboardOpen: false
 };
 
 const network = {
@@ -478,6 +499,10 @@ const network = {
   connected: false,
   lastSend: 0,
   lastEnemySend: 0,
+  lastPingSend: 0,
+  pingSeq: 0,
+  pendingPings: new Map(),
+  ping: null,
   statusEl: null
 };
 
@@ -485,9 +510,15 @@ let gameSeed = 1;
 let nextEnemyId = 1;
 let selectedArena = ARENAS[0];
 let profile = loadProfile();
+let authState = loadAuthState();
+let leaderboardMode = "account";
+let leaderboardEntries = [];
 let lastPointerUnlockAt = 0;
 let enemyPoolWarmupTimer = 0;
 let enemyShadowUpdateTimer = 0;
+let scoreboardRenderTimer = 0;
+let remoteProfileSaveTimer = 0;
+let remoteProfileDirty = false;
 
 const input = {
   x: 0,
@@ -1511,6 +1542,7 @@ function createEmbers() {
 function bindEvents() {
   renderArenaSelector();
   renderCharacterSelector();
+  renderProfilePanel();
   startButton.addEventListener("click", () => {
     if (!state.alive) {
       restart();
@@ -1526,6 +1558,20 @@ function bindEvents() {
     if (isLobbyHidden()) return;
     requestRoomList();
   });
+  loginButton.addEventListener("click", () => requestAccountAuth("login"));
+  registerButton.addEventListener("click", () => requestAccountAuth("register"));
+  logoutButton.addEventListener("click", logoutAccount);
+  leaderboardButton.addEventListener("click", openLeaderboard);
+  leaderboardClose.addEventListener("click", closeLeaderboard);
+  leaderboardOverlay.addEventListener("click", (event) => {
+    if (event.target === leaderboardOverlay) closeLeaderboard();
+  });
+  leaderboardAccountTab.addEventListener("click", () => setLeaderboardMode("account"));
+  leaderboardKillsTab.addEventListener("click", () => setLeaderboardMode("kills"));
+  leaderboardWealthTab.addEventListener("click", () => setLeaderboardMode("wealth"));
+  authPasswordInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") requestAccountAuth("login");
+  });
 
   document.addEventListener("keydown", (event) => {
     if (isTextEntryActive(event.target)) return;
@@ -1535,6 +1581,11 @@ function bindEvents() {
       return;
     }
     if (state.consoleOpen) return;
+    if (event.code === "Tab") {
+      event.preventDefault();
+      setScoreboardOpen(true);
+      return;
+    }
     if (event.repeat) return;
     if (state.levelUpOpen) {
       const abilityNumber = getAbilityChoiceNumber(event);
@@ -1566,6 +1617,10 @@ function bindEvents() {
   });
 
   document.addEventListener("keyup", (event) => {
+    if (event.code === "Tab") {
+      event.preventDefault();
+      setScoreboardOpen(false);
+    }
     if (!isTextEntryActive(event.target) && state.started && event.code === "Space") {
       event.preventDefault();
     }
@@ -1599,9 +1654,13 @@ function bindEvents() {
   }, { passive: false });
   window.addEventListener("blur", () => {
     state.mouseFireHeld = false;
+    setScoreboardOpen(false);
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) state.mouseFireHeld = false;
+    if (document.hidden) {
+      state.mouseFireHeld = false;
+      setScoreboardOpen(false);
+    }
   });
 
   document.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -1743,27 +1802,147 @@ function createDefaultProfile() {
     cores: 0,
     selectedCharacter: CHARACTERS[0].key,
     unlocked: { [CHARACTERS[0].key]: true },
-    characterXp: Object.fromEntries(CHARACTERS.map((character) => [character.key, 0]))
+    characterXp: Object.fromEntries(CHARACTERS.map((character) => [character.key, 0])),
+    stats: { kills: 0, deaths: 0, bestCombatLevel: 1, bestWave: 1 }
   };
+}
+
+function normalizeProfile(value) {
+  const base = createDefaultProfile();
+  const parsed = value && typeof value === "object" ? value : {};
+  const essence = Math.max(0, Math.floor(Number(parsed.essence) || 0));
+  const cores = Math.max(0, Math.floor(Number(parsed.cores) || 0));
+  const unlocked = { ...base.unlocked, ...(parsed.unlocked ?? {}) };
+  const characterXp = { ...base.characterXp };
+  for (const character of CHARACTERS) {
+    characterXp[character.key] = Math.max(0, Math.floor(Number(parsed.characterXp?.[character.key]) || 0));
+    unlocked[character.key] = Boolean(unlocked[character.key]);
+  }
+  const selectedCharacter = unlocked[parsed.selectedCharacter] ? parsed.selectedCharacter : base.selectedCharacter;
+  const stats = {
+    kills: Math.max(0, Math.floor(Number(parsed.stats?.kills) || 0)),
+    deaths: Math.max(0, Math.floor(Number(parsed.stats?.deaths) || 0)),
+    bestCombatLevel: Math.max(1, Math.floor(Number(parsed.stats?.bestCombatLevel) || 1)),
+    bestWave: Math.max(1, Math.floor(Number(parsed.stats?.bestWave) || 1))
+  };
+  return { ...base, essence, cores, selectedCharacter, unlocked, characterXp, stats };
+}
+
+function mergeProfiles(localProfile, remoteProfile) {
+  const local = normalizeProfile(localProfile);
+  const remote = normalizeProfile(remoteProfile);
+  const merged = normalizeProfile({
+    essence: Math.max(local.essence, remote.essence),
+    cores: Math.max(local.cores, remote.cores),
+    selectedCharacter: remote.unlocked[remote.selectedCharacter] ? remote.selectedCharacter : local.selectedCharacter,
+    unlocked: {},
+    characterXp: {},
+    stats: {
+      kills: Math.max(local.stats?.kills ?? 0, remote.stats?.kills ?? 0),
+      deaths: Math.max(local.stats?.deaths ?? 0, remote.stats?.deaths ?? 0),
+      bestCombatLevel: Math.max(local.stats?.bestCombatLevel ?? 1, remote.stats?.bestCombatLevel ?? 1),
+      bestWave: Math.max(local.stats?.bestWave ?? 1, remote.stats?.bestWave ?? 1)
+    }
+  });
+  for (const character of CHARACTERS) {
+    merged.unlocked[character.key] = Boolean(local.unlocked[character.key] || remote.unlocked[character.key]);
+    merged.characterXp[character.key] = Math.max(local.characterXp[character.key] ?? 0, remote.characterXp[character.key] ?? 0);
+  }
+  if (!merged.unlocked[merged.selectedCharacter]) merged.selectedCharacter = local.selectedCharacter;
+  if (!merged.unlocked[merged.selectedCharacter]) merged.selectedCharacter = CHARACTERS[0].key;
+  return merged;
 }
 
 function loadProfile() {
   try {
     const parsed = JSON.parse(localStorage.getItem(PROFILE_KEY) || "null");
-    const base = createDefaultProfile();
-    return {
-      ...base,
-      ...parsed,
-      unlocked: { ...base.unlocked, ...(parsed?.unlocked ?? {}) },
-      characterXp: { ...base.characterXp, ...(parsed?.characterXp ?? {}) }
-    };
+    return normalizeProfile(parsed);
   } catch {
     return createDefaultProfile();
   }
 }
 
 function saveProfile() {
+  profile = normalizeProfile(profile);
   localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  scheduleRemoteProfileSave();
+  renderProfilePanel();
+}
+
+function loadAuthState() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AUTH_KEY) || "null");
+    if (!parsed?.username || !parsed?.token) return { status: "guest", username: "", token: "" };
+    return { status: "saved", username: String(parsed.username), token: String(parsed.token) };
+  } catch {
+    return { status: "guest", username: "", token: "" };
+  }
+}
+
+function saveAuthState() {
+  if (authState.status === "authed" && authState.username && authState.token) {
+    localStorage.setItem(AUTH_KEY, JSON.stringify({ username: authState.username, token: authState.token }));
+  } else {
+    localStorage.removeItem(AUTH_KEY);
+  }
+}
+
+function getProfileTotalXp() {
+  return CHARACTERS.reduce((sum, character) => sum + (profile.characterXp[character.key] ?? 0), 0);
+}
+
+function getProfileUnlockedCount() {
+  return CHARACTERS.filter((character) => profile.unlocked[character.key]).length;
+}
+
+function getProfilePayload() {
+  return normalizeProfile(profile);
+}
+
+function renderProfilePanel() {
+  const authed = authState.status === "authed";
+  const label = authed ? authState.username : "Guest Slayer";
+  accountLabel.textContent = authed ? `Account: ${label}` : "Guest Slayer";
+  profileSummary.textContent = `Account Lv ${getAccountLevel()} / Essence ${profile.essence} / Cores ${profile.cores} / Kills ${profile.stats?.kills ?? 0} / Slayers ${getProfileUnlockedCount()}/${CHARACTERS.length}`;
+  logoutButton.classList.toggle("hidden", !authed);
+  loginButton.classList.toggle("hidden", authed);
+  registerButton.classList.toggle("hidden", authed);
+  authNameInput.classList.toggle("hidden", authed);
+  authPasswordInput.classList.toggle("hidden", authed);
+  if (authed) {
+    authStatus.textContent = `Progress saves to ${label}. Local guest progress is still kept on this device.`;
+  } else if (authState.status === "saved") {
+    authStatus.textContent = `Trying to restore ${authState.username}... Anonymous play still works.`;
+  } else if (!authStatus.textContent) {
+    authStatus.textContent = "Anonymous game is available with a free nickname.";
+  }
+}
+
+function scheduleRemoteProfileSave() {
+  if (authState.status !== "authed" || !network.connected) return;
+  remoteProfileDirty = true;
+  remoteProfileSaveTimer = Math.max(remoteProfileSaveTimer, 0.45);
+}
+
+function flushRemoteProfileSave() {
+  if (!remoteProfileDirty || authState.status !== "authed" || !network.connected) return;
+  remoteProfileDirty = false;
+  remoteProfileSaveTimer = 0;
+  sendNetworkMessage({
+    type: "profile-save",
+    profile: getProfilePayload(),
+    stats: {
+      accountLevel: getAccountLevel(),
+      totalXp: getProfileTotalXp(),
+      essence: profile.essence,
+      cores: profile.cores,
+      unlocked: getProfileUnlockedCount(),
+      kills: profile.stats?.kills ?? 0,
+      deaths: profile.stats?.deaths ?? 0,
+      bestCombatLevel: profile.stats?.bestCombatLevel ?? state.combatLevel,
+      bestWave: profile.stats?.bestWave ?? state.wave
+    }
+  });
 }
 
 function getCharacterLevel(key) {
@@ -1908,6 +2087,7 @@ function initNetwork() {
     network.connected = true;
     network.statusEl.textContent = "NET CONNECTED";
     requestRoomList();
+    tryResumeAccount();
     updateRoomStatus();
   });
   socket.addEventListener("close", () => {
@@ -1916,6 +2096,7 @@ function initNetwork() {
     network.roomName = "";
     network.hostId = null;
     network.statusEl.textContent = "NET OFFLINE";
+    authStatus.textContent = authState.status === "authed" ? "Network offline. Progress is saved locally until reconnect." : "Network offline. Guest play is available.";
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
     renderRoomList();
@@ -1940,6 +2121,37 @@ function handleNetworkMessage(message) {
   if (message.type === "room-list") {
     network.rooms = message.rooms ?? [];
     renderRoomList();
+    return;
+  }
+  if (message.type === "auth-ok") {
+    applyAccountAuth(message);
+    return;
+  }
+  if (message.type === "auth-error") {
+    if (authState.status === "saved") {
+      authState = { status: "guest", username: "", token: "" };
+      saveAuthState();
+    }
+    authStatus.textContent = message.message ?? "Account error.";
+    renderProfilePanel();
+    return;
+  }
+  if (message.type === "profile-saved") {
+    authStatus.textContent = `Progress saved for ${authState.username}.`;
+    return;
+  }
+  if (message.type === "leaderboard") {
+    leaderboardEntries = message.entries ?? [];
+    renderLeaderboard();
+    return;
+  }
+  if (message.type === "pong") {
+    const sentAt = network.pendingPings.get(message.seq);
+    if (sentAt) {
+      network.pendingPings.delete(message.seq);
+      const rtt = Math.max(0, performance.now() - sentAt);
+      network.ping = network.ping == null ? rtt : network.ping * 0.72 + rtt * 0.28;
+    }
     return;
   }
   if (message.type === "room-joined") {
@@ -2021,10 +2233,26 @@ function handleNetworkMessage(message) {
     );
     if (isNewPeer || visualRotationError > 1) peer.group.rotation.y = peer.targetRotation;
     peer.weaponIndex = message.weaponIndex ?? 0;
+    peer.kills = message.kills ?? peer.kills;
+    peer.deaths = message.deaths ?? peer.deaths;
+    peer.combatLevel = message.combatLevel ?? peer.combatLevel;
+    peer.combatXp = message.combatXp ?? peer.combatXp;
+    peer.combatXpNext = message.combatXpNext ?? peer.combatXpNext;
+    peer.ping = message.ping ?? peer.ping;
+    peer.health = message.health ?? peer.health;
+    peer.armor = message.armor ?? peer.armor;
+    peer.characterKey = message.characterKey ?? peer.characterKey;
+    peer.alive = message.alive ?? peer.alive;
+    peer.wave = message.wave ?? peer.wave;
+    peer.lastSeenAt = performance.now();
     return;
   }
   if (message.type === "fire") {
     spawnRemoteShot(message);
+    return;
+  }
+  if (message.type === "kill-credit") {
+    applyKillCredit(message);
     return;
   }
   if (message.type === "enemy-state") {
@@ -2119,6 +2347,269 @@ function renderRoomList() {
   }
 }
 
+function getAuthName() {
+  return (authNameInput.value || playerNameInput.value || "Slayer").trim().replace(/\s+/g, " ").slice(0, 20);
+}
+
+function requestAccountAuth(mode) {
+  if (!network.connected) {
+    authStatus.textContent = "Account server is offline. Guest play is still available.";
+    return;
+  }
+  const username = getAuthName();
+  const password = authPasswordInput.value;
+  if (username.length < 3) {
+    authStatus.textContent = "Login needs at least 3 characters.";
+    return;
+  }
+  if (password.length < 4) {
+    authStatus.textContent = "Password needs at least 4 characters.";
+    return;
+  }
+  authStatus.textContent = mode === "register" ? "Creating account..." : "Logging in...";
+  sendNetworkMessage({
+    type: mode === "register" ? "auth-register" : "auth-login",
+    username,
+    password,
+    profile: mode === "register" ? getProfilePayload() : undefined
+  });
+}
+
+function tryResumeAccount() {
+  if (!network.connected || !authState.username || !authState.token) {
+    renderProfilePanel();
+    return;
+  }
+  authStatus.textContent = `Restoring ${authState.username}...`;
+  sendNetworkMessage({ type: "auth-resume", username: authState.username, token: authState.token });
+}
+
+function applyAccountAuth(message) {
+  const remoteProfile = normalizeProfile(message.profile);
+  authState = {
+    status: "authed",
+    username: message.username || message.account?.username || authState.username,
+    token: message.token || authState.token
+  };
+  saveAuthState();
+  profile = mergeProfiles(profile, remoteProfile);
+  saveProfile();
+  playerNameInput.value = authState.username || playerNameInput.value;
+  authNameInput.value = authState.username || "";
+  authPasswordInput.value = "";
+  authStatus.textContent = `Signed in as ${authState.username}. Progress sync is on.`;
+  renderCharacterSelector();
+  renderProfilePanel();
+  flushRemoteProfileSave();
+  requestLeaderboard();
+}
+
+function logoutAccount() {
+  authState = { status: "guest", username: "", token: "" };
+  saveAuthState();
+  authStatus.textContent = "Logged out. Guest progress stays on this device.";
+  sendNetworkMessage({ type: "auth-logout" });
+  renderProfilePanel();
+}
+
+function requestLeaderboard() {
+  if (!network.connected) {
+    leaderboardEntries = [];
+    renderLeaderboard();
+    return;
+  }
+  sendNetworkMessage({ type: "leaderboard-request" });
+}
+
+function openLeaderboard() {
+  leaderboardOverlay.classList.remove("hidden");
+  requestLeaderboard();
+  renderLeaderboard();
+}
+
+function closeLeaderboard() {
+  leaderboardOverlay.classList.add("hidden");
+}
+
+function setLeaderboardMode(mode) {
+  leaderboardMode = mode;
+  leaderboardAccountTab.classList.toggle("is-selected", mode === "account");
+  leaderboardKillsTab.classList.toggle("is-selected", mode === "kills");
+  leaderboardWealthTab.classList.toggle("is-selected", mode === "wealth");
+  renderLeaderboard();
+}
+
+function getSortedLeaderboardEntries() {
+  const entries = [...leaderboardEntries];
+  if (leaderboardMode === "kills") {
+    return entries.sort((a, b) => (b.kills ?? 0) - (a.kills ?? 0) || (b.accountLevel ?? 1) - (a.accountLevel ?? 1));
+  }
+  if (leaderboardMode === "wealth") {
+    return entries.sort((a, b) => (b.essence ?? 0) + (b.cores ?? 0) * 120 - ((a.essence ?? 0) + (a.cores ?? 0) * 120));
+  }
+  return entries.sort((a, b) => (b.accountLevel ?? 1) - (a.accountLevel ?? 1) || (b.totalXp ?? 0) - (a.totalXp ?? 0));
+}
+
+function renderLeaderboard() {
+  leaderboardRows.textContent = "";
+  if (!leaderboardEntries.length) {
+    const empty = document.createElement("div");
+    empty.className = "leaderboard-empty";
+    empty.textContent = network.connected ? "No account ratings yet." : "Network is offline.";
+    leaderboardRows.appendChild(empty);
+    return;
+  }
+  for (const [index, entry] of getSortedLeaderboardEntries().entries()) {
+    const row = document.createElement("div");
+    row.className = "leaderboard-grid leaderboard-row";
+    const rank = document.createElement("span");
+    rank.textContent = String(index + 1);
+    const name = document.createElement("strong");
+    name.textContent = entry.username;
+    const level = document.createElement("span");
+    level.textContent = String(entry.accountLevel ?? 1);
+    const kills = document.createElement("span");
+    kills.textContent = String(entry.kills ?? 0);
+    const deaths = document.createElement("span");
+    deaths.textContent = String(entry.deaths ?? 0);
+    const essence = document.createElement("span");
+    essence.textContent = String(entry.essence ?? 0);
+    const cores = document.createElement("span");
+    cores.textContent = String(entry.cores ?? 0);
+    row.append(rank, name, level, kills, deaths, essence, cores);
+    leaderboardRows.appendChild(row);
+  }
+}
+
+function setScoreboardOpen(open) {
+  state.scoreboardOpen = open;
+  scoreboard.classList.toggle("hidden", !open);
+  scoreboard.setAttribute("aria-hidden", open ? "false" : "true");
+  if (open) {
+    scoreboardRenderTimer = 0;
+    renderScoreboard();
+  }
+}
+
+function getCharacterName(key) {
+  return CHARACTER_BY_KEY.get(key)?.name ?? "Slayer";
+}
+
+function formatScorePing(value) {
+  if (value == null) return "-";
+  return Number.isFinite(value) ? `${Math.round(value)} ms` : "...";
+}
+
+function formatScoreXp(current, next) {
+  if (!Number.isFinite(current) || !Number.isFinite(next) || next <= 0) return "-";
+  return `${Math.floor(current)}/${Math.floor(next)}`;
+}
+
+function getLocalScoreboardEntry() {
+  const character = getSelectedCharacter();
+  return {
+    id: network.id ?? "local",
+    local: true,
+    host: isEnemyHost(),
+    name: getPlayerName(),
+    kills: state.sessionKills,
+    deaths: state.deaths,
+    combatLevel: state.combatLevel,
+    combatXp: state.combatXp,
+    combatXpNext: state.combatXpNext,
+    ping: network.roomId ? network.ping ?? NaN : null,
+    weaponIndex: state.weaponIndex,
+    characterKey: character.key,
+    health: state.health,
+    armor: state.armor,
+    alive: state.alive,
+    wave: state.wave,
+    lastSeenAt: performance.now()
+  };
+}
+
+function getScoreboardEntries() {
+  const entries = [getLocalScoreboardEntry()];
+  for (const peer of network.peers.values()) {
+    entries.push({
+      id: peer.id,
+      local: false,
+      host: network.hostId === peer.id,
+      name: peer.playerName || `P${peer.id}`,
+      kills: peer.kills ?? 0,
+      deaths: peer.deaths ?? 0,
+      combatLevel: peer.combatLevel ?? 1,
+      combatXp: peer.combatXp ?? 0,
+      combatXpNext: peer.combatXpNext ?? 80,
+      ping: peer.ping ?? NaN,
+      weaponIndex: peer.weaponIndex ?? 0,
+      characterKey: peer.characterKey ?? CHARACTERS[0].key,
+      health: peer.health ?? 0,
+      armor: peer.armor ?? 0,
+      alive: peer.alive ?? true,
+      wave: peer.wave ?? 1,
+      lastSeenAt: peer.lastSeenAt ?? 0
+    });
+  }
+  return entries.sort((a, b) => {
+    if (a.local) return -1;
+    if (b.local) return 1;
+    if (b.kills !== a.kills) return b.kills - a.kills;
+    return String(a.name).localeCompare(String(b.name));
+  });
+}
+
+function renderScoreboard() {
+  scoreboardRows.textContent = "";
+  const entries = getScoreboardEntries();
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "scoreboard-grid scoreboard-row";
+    if (entry.local) row.classList.add("local");
+    if (!entry.alive) row.classList.add("dead");
+
+    const name = document.createElement("span");
+    name.className = "scoreboard-name";
+    const nameText = document.createElement("strong");
+    nameText.textContent = entry.name;
+    const details = document.createElement("small");
+    details.textContent = [
+      entry.local ? "YOU" : `P${entry.id}`,
+      entry.host ? "HOST" : "",
+      entry.alive ? "ALIVE" : "DOWN",
+      `WAVE ${roman[entry.wave - 1] ?? entry.wave}`
+    ].filter(Boolean).join(" / ");
+    name.append(nameText, details);
+
+    const kills = document.createElement("span");
+    kills.textContent = String(entry.kills ?? 0);
+    const deaths = document.createElement("span");
+    deaths.textContent = String(entry.deaths ?? 0);
+    const level = document.createElement("span");
+    level.textContent = String(entry.combatLevel ?? 1);
+    const xp = document.createElement("span");
+    xp.textContent = formatScoreXp(entry.combatXp, entry.combatXpNext);
+    const ping = document.createElement("span");
+    ping.textContent = formatScorePing(entry.ping);
+
+    const loadout = document.createElement("span");
+    loadout.className = "scoreboard-loadout";
+    const weapon = WEAPONS[entry.weaponIndex] ?? WEAPONS[0];
+    loadout.textContent = `${getCharacterName(entry.characterKey)} / ${weapon.name} / ${Math.max(0, Math.ceil(entry.health))} HP / ${Math.max(0, Math.ceil(entry.armor))} A`;
+
+    row.append(name, kills, deaths, level, xp, ping, loadout);
+    scoreboardRows.appendChild(row);
+  }
+}
+
+function updateScoreboard(delta) {
+  if (!state.scoreboardOpen) return;
+  scoreboardRenderTimer -= delta;
+  if (scoreboardRenderTimer > 0) return;
+  scoreboardRenderTimer = 0.12;
+  renderScoreboard();
+}
+
 function setGameSeed(seed) {
   gameSeed = Math.max(1, Number(seed) || 1) >>> 0;
 }
@@ -2159,6 +2650,8 @@ function resetRoomGame(seed) {
   state.ammo = AMMO_MAX;
   state.wave = 1;
   state.kills = 0;
+  state.sessionKills = 0;
+  state.deaths = 0;
   state.nextBossKill = BOSS_KILL_INTERVAL;
   state.bossIndex = 0;
   state.nextWaveAt = 0;
@@ -2249,7 +2742,19 @@ function createRemotePlayer(id) {
     walkPhase: 0,
     moveSpeed: 0,
     weaponIndex: 0,
-    playerName: `P${id}`
+    playerName: `P${id}`,
+    kills: 0,
+    deaths: 0,
+    combatLevel: 1,
+    combatXp: 0,
+    combatXpNext: 80,
+    ping: null,
+    health: 100,
+    armor: 0,
+    characterKey: CHARACTERS[0].key,
+    alive: true,
+    wave: 1,
+    lastSeenAt: performance.now()
   };
 }
 
@@ -2366,7 +2871,27 @@ function sendNetworkMessage(payload) {
   }
 }
 
+function updateNetworkPing(delta) {
+  if (!network.connected) return;
+  network.lastPingSend += delta;
+  if (network.lastPingSend < 1.6) return;
+  network.lastPingSend = 0;
+  const seq = `${network.id ?? "local"}-${network.pingSeq++}`;
+  network.pendingPings.set(seq, performance.now());
+  if (network.pendingPings.size > 8) {
+    const staleSeq = network.pendingPings.keys().next().value;
+    network.pendingPings.delete(staleSeq);
+  }
+  sendNetworkMessage({ type: "ping", seq });
+}
+
 function updateNetwork(delta) {
+  updateNetworkPing(delta);
+  if (remoteProfileDirty) {
+    remoteProfileSaveTimer = Math.max(0, remoteProfileSaveTimer - delta);
+    if (remoteProfileSaveTimer <= 0) flushRemoteProfileSave();
+  }
+
   for (const peer of network.peers.values()) {
     const previousPosition = peer.group.position.clone();
     peer.group.position.lerp(peer.targetPosition, 1 - Math.pow(0.001, delta));
@@ -2418,6 +2943,17 @@ function updateNetwork(delta) {
     lx: Math.sin(lookYaw),
     lz: Math.cos(lookYaw),
     weaponIndex: state.weaponIndex,
+    kills: state.sessionKills,
+    deaths: state.deaths,
+    combatLevel: state.combatLevel,
+    combatXp: state.combatXp,
+    combatXpNext: state.combatXpNext,
+    ping: network.ping,
+    health: state.health,
+    armor: state.armor,
+    characterKey: getSelectedCharacter().key,
+    alive: state.alive,
+    wave: state.wave,
     playerName: getPlayerName()
   });
 }
@@ -2429,13 +2965,32 @@ function spawnRemoteShot(message) {
     ? new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 6), mat)
     : new THREE.Mesh(geometries.projectile, mat);
   const dir = new THREE.Vector3(message.dx ?? 0, message.dy ?? 0, message.dz ?? -1).normalize();
+  const velocity = dir.clone().multiplyScalar(weapon.speed);
   mesh.position.set(message.x ?? 0, message.y ?? PLAYER_HEIGHT, message.z ?? 0);
   if (!message.muzzleOrigin) mesh.position.addScaledVector(dir, 1.2);
   mesh.scale.setScalar(weapon.size);
   scene.add(mesh);
+  if (isEnemyHost()) {
+    const damageMultiplier = THREE.MathUtils.clamp(Number(message.damageMultiplier) || 1, 0.2, 5);
+    projectiles.push({
+      mesh,
+      velocity,
+      ttl: weapon.ttl,
+      damage: weapon.damage * damageMultiplier,
+      pierce: weapon.pierce ?? 0,
+      blastRadius: weapon.blastRadius ?? 0,
+      gravity: weapon.gravity ?? 0,
+      color: weapon.color,
+      weaponIndex: message.weaponIndex ?? 0,
+      shield: weapon.disc,
+      ownerId: message.id
+    });
+    spawnMuzzleSparks(mesh.position, dir, 10, weapon.color);
+    return;
+  }
   remoteProjectiles.push({
     mesh,
-    velocity: dir.multiplyScalar(weapon.speed),
+    velocity,
     ttl: Math.min(weapon.ttl, 1.2),
     weaponIndex: message.weaponIndex ?? 0,
     color: weapon.color,
@@ -2768,15 +3323,54 @@ function queueEnemyReinforcements() {
   }
 }
 
-function recordEnemyKill(enemy) {
+function applyKillCredit(message) {
+  if (message.targetId === network.id) {
+    state.sessionKills += 1;
+    profile.stats.kills = (profile.stats.kills ?? 0) + 1;
+    grantKillProgression({ boss: Boolean(message.boss) });
+    gainCombatXp(message.boss ? 110 : 18 + (message.wave ?? state.wave) * 3);
+    updateProfileCombatBest(message.wave ?? state.wave);
+    saveProfile();
+    return;
+  }
+  const peer = network.peers.get(message.targetId);
+  if (peer) peer.kills = (peer.kills ?? 0) + 1;
+}
+
+function creditRemoteKill(killerId, enemy) {
+  const peer = network.peers.get(killerId);
+  if (peer) peer.kills = (peer.kills ?? 0) + 1;
+  sendNetworkMessage({
+    type: "kill-credit",
+    targetId: killerId,
+    boss: Boolean(enemy?.boss),
+    wave: state.wave
+  });
+}
+
+function recordEnemyKill(enemy, killerId = network.id ?? "local") {
   state.kills += 1;
-  grantKillProgression(enemy);
-  gainCombatXp(enemy?.boss ? 110 : 18 + state.wave * 3);
+  const localKill = !network.roomId || !killerId || killerId === network.id;
+  if (localKill) {
+    state.sessionKills += 1;
+    profile.stats.kills = (profile.stats.kills ?? 0) + 1;
+    grantKillProgression(enemy);
+    gainCombatXp(enemy?.boss ? 110 : 18 + state.wave * 3);
+    updateProfileCombatBest(state.wave);
+    saveProfile();
+  } else {
+    creditRemoteKill(killerId, enemy);
+  }
   maybeQueueBossSpawn();
-  if (enemy?.boss) {
+  if (localKill && enemy?.boss) {
     state.ammo = Math.min(AMMO_MAX, state.ammo + 140);
     state.armor = Math.min(getMaxArmor(), state.armor + 18 + abilityRank("aegisLoop") * 3);
   }
+}
+
+function updateProfileCombatBest(wave = state.wave) {
+  profile.stats.bestCombatLevel = Math.max(profile.stats.bestCombatLevel ?? 1, state.combatLevel);
+  profile.stats.bestWave = Math.max(profile.stats.bestWave ?? 1, wave);
 }
 
 function grantKillProgression(enemy) {
@@ -2789,7 +3383,6 @@ function grantKillProgression(enemy) {
   profile.essence += essenceGain;
   profile.cores += coreGain;
   profile.characterXp[character.key] = (profile.characterXp[character.key] ?? 0) + xpGain;
-  saveProfile();
   renderCharacterSelector();
 }
 
@@ -3555,7 +4148,8 @@ function fire() {
       z: networkOrigin.z,
       dx: networkDir.x,
       dy: networkDir.y,
-      dz: networkDir.z
+      dz: networkDir.z,
+      damageMultiplier: getDamageMultiplier()
     });
   }
   for (let i = 0; i < weapon.shots; i += 1) {
@@ -3638,6 +4232,7 @@ function update(delta) {
     updateInput();
     updateEffects(delta);
     updateWeapon(delta);
+    updateScoreboard(delta);
     updateHud();
     return;
   }
@@ -3655,6 +4250,7 @@ function update(delta) {
   updateEffects(delta);
   updateWeapon(delta);
   updateNetwork(delta);
+  updateScoreboard(delta);
   updateHud();
 }
 
@@ -4399,7 +4995,7 @@ function updateProjectiles(delta) {
         spawnBloodHit(shot.mesh.position, shot.velocity.clone().normalize(), enemy.type, shot.damage);
         flashHit();
         if (enemy.health <= 0) {
-          killEnemy(enemy, e);
+          killEnemy(enemy, e, shot.ownerId);
         }
         if (shot.blastRadius) {
           explodeProjectile(shot);
@@ -4690,7 +5286,12 @@ function getRagdollFloorOffset(part) {
 }
 
 function die() {
+  if (!state.alive) return;
   state.alive = false;
+  state.deaths += 1;
+  profile.stats.deaths = (profile.stats.deaths ?? 0) + 1;
+  updateProfileCombatBest(state.wave);
+  saveProfile();
   state.health = 0;
   if (network.roomId && isEnemyHost()) {
     sendNetworkMessage({ type: "host-dead" });
@@ -4700,8 +5301,8 @@ function die() {
   unlockPointer();
 }
 
-function killEnemy(enemy, index) {
-  recordEnemyKill(enemy);
+function killEnemy(enemy, index, killerId) {
+  recordEnemyKill(enemy, killerId);
   maybeDrop(enemy.group.position);
   makeScorch(enemy.group.position, enemy.type === "wraith" ? 0x20c8a4 : 0xff3218);
   spawnMuzzleSparks(enemy.group.position.clone().setY(1.6), worldUp, enemy.type === "brute" ? 44 : 28, enemy.type === "wraith" ? 0x5fffe0 : 0xff5a1d);
@@ -4788,7 +5389,7 @@ function explodeProjectile(shot) {
       const falloff = 1 - distance / shot.blastRadius;
       enemy.health -= shot.damage * (0.35 + falloff * 0.85);
       spawnBloodHit(enemy.group.position.clone().setY(1.45), enemy.group.position.clone().sub(origin).normalize(), enemy.type, shot.damage * falloff);
-      if (enemy.health <= 0) killEnemy(enemy, e);
+      if (enemy.health <= 0) killEnemy(enemy, e, shot.ownerId);
     }
   }
   makeScorch(origin, shot.color ?? 0xff4a18);

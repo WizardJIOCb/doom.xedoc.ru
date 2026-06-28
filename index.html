@@ -14,6 +14,21 @@
           <span class="sigil"></span>
           <p>IRON CITADEL</p>
         </div>
+        <div class="profile-panel">
+          <div class="profile-summary">
+            <span id="accountLabel">Guest Slayer</span>
+            <strong id="profileSummary">Account Lv 1 / Essence 0 / Cores 0</strong>
+          </div>
+          <div id="authControls" class="auth-controls">
+            <input id="authNameInput" type="text" maxlength="20" placeholder="Login" aria-label="Account login" />
+            <input id="authPasswordInput" type="password" maxlength="48" placeholder="Password" aria-label="Account password" />
+            <button id="loginButton" type="button">Login</button>
+            <button id="registerButton" type="button">Register</button>
+            <button id="logoutButton" class="hidden" type="button">Logout</button>
+            <button id="leaderboardButton" type="button">Rating</button>
+          </div>
+          <div id="authStatus" class="auth-status">Anonymous game is available with a free nickname.</div>
+        </div>
         <h1>Hellforged Siege</h1>
         <div class="arena-panel">
           <div class="arena-heading">Choose Arena</div>
@@ -59,6 +74,25 @@
         </div>
       </div>
 
+      <div id="scoreboard" class="scoreboard hidden" aria-hidden="true">
+        <div class="scoreboard-panel">
+          <div class="scoreboard-head">
+            <span>Session</span>
+            <strong>Slayer Board</strong>
+          </div>
+          <div class="scoreboard-grid scoreboard-grid-head" aria-hidden="true">
+            <span>Player</span>
+            <span>K</span>
+            <span>D</span>
+            <span>Lv</span>
+            <span>XP</span>
+            <span>Ping</span>
+            <span>Loadout</span>
+          </div>
+          <div id="scoreboardRows" class="scoreboard-rows"></div>
+        </div>
+      </div>
+
       <div class="reticle" aria-hidden="true">
         <span></span>
       </div>
@@ -71,6 +105,33 @@
           <span>ASCENSION</span>
           <strong id="levelUpTitle">Choose Power</strong>
           <div id="levelUpChoices" class="level-up-choices"></div>
+        </div>
+      </div>
+
+      <div id="leaderboardOverlay" class="leaderboard-overlay hidden">
+        <div class="leaderboard-panel">
+          <div class="leaderboard-head">
+            <div>
+              <span>Rating</span>
+              <strong>Slayer Ranks</strong>
+            </div>
+            <button id="leaderboardClose" type="button" aria-label="Close rating">×</button>
+          </div>
+          <div class="leaderboard-tabs">
+            <button id="leaderboardAccountTab" class="is-selected" type="button">Account</button>
+            <button id="leaderboardKillsTab" type="button">Kills</button>
+            <button id="leaderboardWealthTab" type="button">Wealth</button>
+          </div>
+          <div class="leaderboard-grid leaderboard-grid-head" aria-hidden="true">
+            <span>#</span>
+            <span>Player</span>
+            <span>Lv</span>
+            <span>Kills</span>
+            <span>Deaths</span>
+            <span>Essence</span>
+            <span>Cores</span>
+          </div>
+          <div id="leaderboardRows" class="leaderboard-rows"></div>
         </div>
       </div>
 
