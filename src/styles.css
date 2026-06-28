@@ -634,6 +634,12 @@ button {
   box-shadow: 0 0 14px rgba(80, 210, 177, 0.72);
 }
 
+.weapon {
+  grid-column: 4;
+  justify-self: end;
+  width: 100%;
+}
+
 .status {
   position: fixed;
   top: 18px;
@@ -1234,6 +1240,10 @@ button {
 @media (max-width: 720px) {
   .hud {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .weapon {
+    grid-column: 2;
   }
 
   .status {
