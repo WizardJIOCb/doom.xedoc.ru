@@ -68,6 +68,7 @@ const PLATFORM_THICKNESS = 0.72;
 const RAMP_THICKNESS = 0.46;
 const UNDER_PLATFORM_CLEARANCE = 0.22;
 const MAX_ENEMIES = 72;
+const ENEMY_POOL_WARMUP_DELAY = 0.16;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
 const WAVE_BULK_GROWTH = 2;
@@ -84,6 +85,19 @@ const WEAPONS = [
 ];
 const BOSS_TYPES = ["dreadlord", "goremaw", "voidseer", "ironwarden"];
 const ENEMY_TYPES = ["raider", "brute", "wraith", "imp", "stalker", "sentinel", "crawler", ...BOSS_TYPES];
+const ENEMY_POOL_TARGETS = {
+  raider: 14,
+  imp: 14,
+  crawler: 8,
+  wraith: 8,
+  stalker: 8,
+  sentinel: 7,
+  brute: 7,
+  dreadlord: 1,
+  goremaw: 1,
+  voidseer: 1,
+  ironwarden: 1
+};
 const BOSS_KILL_INTERVAL = 24;
 const ARENAS = [
   {
@@ -366,6 +380,8 @@ const projectiles = [];
 const enemyBolts = [];
 const enemies = [];
 const enemiesById = new Map();
+const enemyPools = new Map();
+const enemyPoolWarmupQueue = [];
 const pickups = [];
 const sparks = [];
 const bloodDrops = [];
@@ -450,6 +466,7 @@ let nextEnemyId = 1;
 let selectedArena = ARENAS[0];
 let profile = loadProfile();
 let lastPointerUnlockAt = 0;
+let enemyPoolWarmupTimer = 0;
 
 const input = {
   x: 0,
@@ -500,11 +517,14 @@ window.ironCitadelDebug = {
   decals,
   ragdolls,
   projectileHitVolumes,
+  enemyPools,
+  enemyPoolWarmupQueue,
   camera,
   controls,
   isEnemyHost,
   getWaveEnemyCount,
   getActiveEnemyTarget,
+  queueEnemySpawn,
   gainCombatXp,
   openLevelUp,
   getProjectileWorldImpact,
@@ -741,9 +761,63 @@ function circleGeometry(radius, segments) {
 function prewarmEnemyGeometryCache() {
   const savedSeed = gameSeed;
   for (const type of ENEMY_TYPES) {
-    createEnemy(type);
+    while (getEnemyPool(type).length < getEnemyPoolTarget(type)) {
+      addEnemyToPool(createEnemy(type));
+    }
   }
+  scheduleEnemyPoolWarmup();
   gameSeed = savedSeed;
+}
+
+function getEnemyPool(type) {
+  let pool = enemyPools.get(type);
+  if (!pool) {
+    pool = [];
+    enemyPools.set(type, pool);
+  }
+  return pool;
+}
+
+function getEnemyPoolTarget(type) {
+  return ENEMY_POOL_TARGETS[type] ?? 4;
+}
+
+function addEnemyToPool(enemy) {
+  const pool = getEnemyPool(enemy.type);
+  const maxPoolSize = Math.max(getEnemyPoolTarget(enemy.type) + 8, 12);
+  scene.remove(enemy.group);
+  enemy.group.visible = false;
+  enemy.dead = true;
+  enemy.netId = "";
+  if (pool.length < maxPoolSize) pool.push(enemy);
+}
+
+function scheduleEnemyPoolWarmup() {
+  enemyPoolWarmupQueue.length = 0;
+  const neededByType = new Map();
+  let maxNeeded = 0;
+  for (const type of ENEMY_TYPES) {
+    const needed = Math.max(0, getEnemyPoolTarget(type) - getEnemyPool(type).length);
+    neededByType.set(type, needed);
+    maxNeeded = Math.max(maxNeeded, needed);
+  }
+  for (let i = 0; i < maxNeeded; i += 1) {
+    for (const type of ENEMY_TYPES) {
+      if (i < (neededByType.get(type) ?? 0)) enemyPoolWarmupQueue.push(type);
+    }
+  }
+}
+
+function processEnemyPoolWarmup(delta) {
+  if (!enemyPoolWarmupQueue.length || spawnQueue.length) return;
+  enemyPoolWarmupTimer -= delta;
+  if (enemyPoolWarmupTimer > 0) return;
+
+  const type = enemyPoolWarmupQueue.shift();
+  if (type && getEnemyPool(type).length < getEnemyPoolTarget(type)) {
+    addEnemyToPool(createEnemy(type));
+  }
+  enemyPoolWarmupTimer = ENEMY_POOL_WARMUP_DELAY;
 }
 
 function getArenaTheme() {
@@ -2053,7 +2127,7 @@ function resetRoomGame(seed) {
   spawnQueue.length = 0;
   spawnDripTimer = 0;
   enemiesById.clear();
-  enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
+  enemies.splice(0).forEach((enemy) => releaseEnemy(enemy));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
   enemyBolts.splice(0).forEach((shot) => scene.remove(shot.mesh));
   pickups.splice(0).forEach((pickup) => scene.remove(pickup.mesh));
@@ -2191,7 +2265,7 @@ function applyEnemyState(message) {
     let enemy = enemiesById.get(id);
     let isNewEnemy = false;
     if (!enemy) {
-      enemy = createEnemy(snapshot.type ?? "raider");
+      enemy = acquireEnemy(snapshot.type ?? "raider");
       enemy.netId = id;
       enemiesById.set(id, enemy);
       enemies.push(enemy);
@@ -2210,8 +2284,7 @@ function applyEnemyState(message) {
     const enemy = enemies[i];
     if (!seen.has(String(enemy.netId))) {
       spawnEnemyRagdoll(enemy, 0.82);
-      scene.remove(enemy.group);
-      enemiesById.delete(String(enemy.netId));
+      releaseEnemy(enemy);
       enemies.splice(i, 1);
     }
   }
@@ -2491,9 +2564,8 @@ function runConsoleCommand(rawCommand) {
     enemies.splice(0).forEach((enemy) => {
       spawnEnemyRagdoll(enemy, 1.15);
       makeScorch(enemy.group.position, 0xff4a18);
-      scene.remove(enemy.group);
-      enemiesById.delete(String(enemy.netId));
       recordEnemyKill(enemy);
+      releaseEnemy(enemy);
     });
     logConsole("all monsters removed", "ok");
     return;
@@ -2504,7 +2576,7 @@ function runConsoleCommand(rawCommand) {
     spawnQueue.length = 0;
     spawnDripTimer = 0;
     enemiesById.clear();
-    enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
+    enemies.splice(0).forEach((enemy) => releaseEnemy(enemy));
     clearRagdolls();
     bloodDrops.splice(0).forEach((drop) => releaseBloodDrop(drop.mesh));
     spawnWave();
@@ -2601,7 +2673,7 @@ function restart() {
   spawnDripTimer = 0;
   placePlayerAtArenaSpawn();
   enemiesById.clear();
-  enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
+  enemies.splice(0).forEach((enemy) => releaseEnemy(enemy));
   clearRagdolls();
   bloodDrops.splice(0).forEach((drop) => releaseBloodDrop(drop.mesh));
   projectiles.splice(0).forEach((shot) => scene.remove(shot.mesh));
@@ -2806,7 +2878,7 @@ function spawnEnemy(type, index = 0) {
   const x = Math.sin(angle) * radius;
   const z = Math.cos(angle) * radius;
   const floorY = getArenaFloorHeight(x, z);
-  const enemy = createEnemy(type);
+  const enemy = acquireEnemy(type);
   enemy.netId = `${network.id ?? "local"}-${nextEnemyId++}`;
   enemy.group.position.set(x, floorY - 1.35, z);
   enemy.lastPosition.copy(enemy.group.position);
@@ -2815,6 +2887,91 @@ function spawnEnemy(type, index = 0) {
   scene.add(enemy.group);
   enemiesById.set(enemy.netId, enemy);
   enemies.push(enemy);
+}
+
+function acquireEnemy(type) {
+  const pool = getEnemyPool(type);
+  const enemy = pool.pop() ?? createEnemy(type);
+  resetEnemyForSpawn(enemy, type);
+  return enemy;
+}
+
+function releaseEnemy(enemy) {
+  if (!enemy) return;
+  scene.remove(enemy.group);
+  enemiesById.delete(String(enemy.netId));
+  addEnemyToPool(enemy);
+  scheduleEnemyPoolWarmup();
+}
+
+function resetEnemyForSpawn(enemy, type = enemy.type) {
+  const stats = getEnemyStats(type);
+  enemy.type = type;
+  enemy.health = stats.health + state.wave * stats.healthPerWave;
+  enemy.speed = stats.speed;
+  enemy.damage = stats.damage;
+  enemy.attackRange = stats.attackRange;
+  enemy.ranged = stats.ranged;
+  enemy.boss = Boolean(stats.boss);
+  enemy.hitRadius = stats.hitRadius ?? (stats.boss ? 2.1 : 1.1);
+  enemy.boltColor = stats.glow;
+  enemy.spawnProgress = 0;
+  enemy.attackTimer = 0.9 + gameRandom() * 1.1;
+  enemy.bob = gameRandom() * Math.PI * 2;
+  enemy.moveSpeed = 0;
+  enemy.dead = false;
+  enemy.group.visible = true;
+  enemy.group.position.set(0, 0, 0);
+  enemy.group.rotation.set(0, 0, 0);
+  enemy.group.scale.setScalar(1);
+  enemy.lastPosition.set(0, 0, 0);
+  resetEnemyPose(enemy);
+}
+
+function resetEnemyPose(enemy) {
+  enemy.body.position.y = enemy.bodyBaseY;
+  enemy.body.rotation.set(0, 0, 0);
+  enemy.head.position.y = enemy.headBaseY;
+  enemy.head.rotation.set(0, 0, 0);
+  if (enemy.chest) enemy.chest.rotation.set(0, 0, 0);
+  if (enemy.blade) enemy.blade.rotation.set(-0.75, 0, 0);
+
+  if (enemy.skeleton?.bones) {
+    for (const bone of enemy.skeleton.bones) {
+      bone.rotation.set(0, 0, 0);
+    }
+  }
+
+  for (const leg of enemy.limbs.legs) {
+    const joint = leg.bone ?? leg.mesh;
+    joint.position.y = leg.baseBoneY ?? leg.baseY;
+    joint.position.z = leg.baseBoneZ ?? leg.baseZ;
+    joint.rotation.x = leg.baseBoneRotX ?? 0;
+    joint.rotation.z = leg.baseBoneRotZ ?? leg.baseRotZ ?? 0;
+    if (leg.childBone) leg.childBone.rotation.set(0, 0, 0);
+  }
+
+  for (const foot of enemy.limbs.feet) {
+    const joint = foot.bone ?? foot.mesh;
+    joint.position.y = foot.baseBoneY ?? foot.baseY;
+    joint.position.z = foot.baseBoneZ ?? foot.baseZ;
+    joint.rotation.x = foot.baseBoneRotX ?? 0;
+  }
+
+  for (const arm of enemy.limbs.arms) {
+    const joint = arm.bone ?? arm.mesh;
+    joint.position.y = arm.baseBoneY ?? arm.baseY;
+    joint.position.z = arm.baseBoneZ ?? arm.baseZ;
+    joint.rotation.x = arm.baseBoneRotX ?? 0;
+    joint.rotation.z = arm.baseBoneRotZ ?? arm.baseRotZ ?? 0;
+    if (arm.childBone) arm.childBone.rotation.set(0, 0, 0);
+  }
+
+  for (const wing of enemy.limbs.wings) {
+    const joint = wing.bone ?? wing.mesh;
+    joint.rotation.x = wing.baseBoneRotX ?? wing.baseRotX ?? 0;
+    joint.rotation.z = wing.baseBoneRotZ ?? wing.baseRotZ ?? 0;
+  }
 }
 
 function getEnemyStats(type) {
@@ -3411,10 +3568,12 @@ function updateTimers(delta) {
   muzzleLight.intensity = THREE.MathUtils.damp(muzzleLight.intensity, 0, 18, delta);
   if (!state.started && !network.roomId) {
     state.nextWaveAt = 0;
+    processEnemyPoolWarmup(delta);
     return;
   }
   if (!isEnemyHost()) return;
   processSpawnQueue(delta);
+  processEnemyPoolWarmup(delta);
 
   if (enemies.length === 0 && spawnQueue.length === 0 && state.alive) {
     state.nextWaveAt += delta;
@@ -4390,8 +4549,7 @@ function killEnemy(enemy, index) {
   makeScorch(enemy.group.position, enemy.type === "wraith" ? 0x20c8a4 : 0xff3218);
   spawnMuzzleSparks(enemy.group.position.clone().setY(1.6), worldUp, enemy.type === "brute" ? 44 : 28, enemy.type === "wraith" ? 0x5fffe0 : 0xff5a1d);
   spawnEnemyRagdoll(enemy);
-  scene.remove(enemy.group);
-  enemiesById.delete(String(enemy.netId));
+  releaseEnemy(enemy);
   enemies.splice(index, 1);
 }
 
