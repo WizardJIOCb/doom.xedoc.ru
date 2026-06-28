@@ -86,6 +86,8 @@ const ENEMY_ROCKET_JUMP_COOLDOWN = 1.15;
 const ENEMY_SHADOW_LIMIT = 12;
 const ENEMY_SHADOW_UPDATE_INTERVAL = 0.22;
 const ENEMY_GPU_WARMUP_PER_FRAME = 3;
+const REINFORCEMENT_INTERVAL = 0.85;
+const REINFORCEMENT_BATCH_MAX = 10;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
 const WAVE_BULK_GROWTH = 2;
@@ -531,6 +533,7 @@ window.ironCitadelDebug = {
   enemies,
   projectiles,
   enemyBolts,
+  spawnQueue,
   sparks,
   bloodDrops,
   decals,
@@ -2754,6 +2757,17 @@ function queueEnemySpawn(type, index = 0) {
   spawnQueue.push({ type, index });
 }
 
+function queueEnemyReinforcements() {
+  if (!isEnemyHost() || state.wave <= 2) return;
+  const target = getActiveEnemyTarget(state.wave);
+  const deficit = target - enemies.length - spawnQueue.length;
+  if (deficit <= 0) return;
+  const batch = Math.min(deficit, REINFORCEMENT_BATCH_MAX, Math.max(4, Math.ceil(target * 0.35)));
+  for (let i = 0; i < batch; i += 1) {
+    queueEnemySpawn(pickEnemyType(), i);
+  }
+}
+
 function recordEnemyKill(enemy) {
   state.kills += 1;
   grantKillProgression(enemy);
@@ -3673,8 +3687,8 @@ function updateTimers(delta) {
   }
 
   if (state.spawnTimer <= 0 && spawnQueue.length === 0 && enemies.length < getActiveEnemyTarget(state.wave) && state.wave > 2) {
-    state.spawnTimer = 3.2 - Math.min(state.wave * 0.12, 1.45);
-    queueEnemySpawn(pickEnemyType());
+    state.spawnTimer = Math.max(0.42, REINFORCEMENT_INTERVAL - Math.min(state.wave * 0.025, 0.28));
+    queueEnemyReinforcements();
   }
 }
 
