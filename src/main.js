@@ -6,6 +6,11 @@ const canvas = document.querySelector("#game");
 const overlay = document.querySelector("#overlay");
 const startButton = document.querySelector("#startButton");
 const arenaList = document.querySelector("#arenaList");
+const characterList = document.querySelector("#characterList");
+const progressionStatus = document.querySelector("#progressionStatus");
+const levelUpOverlay = document.querySelector("#levelUpOverlay");
+const levelUpTitle = document.querySelector("#levelUpTitle");
+const levelUpChoices = document.querySelector("#levelUpChoices");
 const playerNameInput = document.querySelector("#playerNameInput");
 const roomNameInput = document.querySelector("#roomNameInput");
 const createRoomButton = document.querySelector("#createRoomButton");
@@ -59,6 +64,8 @@ const PLAYER_RADIUS = 1.05;
 const PLAYER_HEIGHT = 2.2;
 const PLAYER_STEP_HEIGHT = 0.72;
 const SURFACE_SNAP_HEIGHT = 0.16;
+const PLATFORM_THICKNESS = 0.72;
+const UNDER_PLATFORM_CLEARANCE = 0.22;
 const MAX_ENEMIES = 72;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
@@ -140,9 +147,182 @@ const ARENAS = [
       { x: 12, z: -15, width: 6.5, length: 19, from: 4.4, to: 7.8, yaw: -0.7 },
       { x: -12, z: -15, width: 6.5, length: 19, from: 4.4, to: 7.8, yaw: 0.7 }
     ]
+  },
+  {
+    key: "dunes",
+    name: "Sunlit Dunes",
+    blurb: "Bright desert ruins, long sightlines, warm air.",
+    spawn: { x: 0, z: 24 },
+    theme: {
+      background: 0xf3c783,
+      fog: 0xf0b46a,
+      fogDensity: 0.008,
+      hemiSky: 0xffe6b0,
+      hemiGround: 0xb86d35,
+      hemiPower: 1.75,
+      sunColor: 0xfff0b8,
+      sunPower: 1.85,
+      floorColor: 0xdca15d,
+      floorEmissive: 0x4c2607,
+      floorEmissiveIntensity: 0.18
+    },
+    jumpPads: [
+      { x: 0, z: 31, yaw: Math.PI, power: 18, lift: 14.2 },
+      { x: 28, z: -8, yaw: -1.45, power: 17, lift: 13.4 },
+      { x: -28, z: -8, yaw: 1.45, power: 17, lift: 13.4 },
+      { x: 0, z: -31, yaw: 0, power: 19, lift: 14.4 }
+    ],
+    platforms: [
+      { x: -18, z: -12, width: 14, depth: 12, height: 3.25, yaw: 0.32 },
+      { x: 18, z: -12, width: 14, depth: 12, height: 3.25, yaw: -0.32 },
+      { x: 0, z: -25, width: 16, depth: 10, height: 4.6, yaw: 0 }
+    ],
+    ramps: [
+      { x: -8, z: 5, width: 7, length: 20, from: 0, to: 3.25, yaw: -0.42 },
+      { x: 8, z: 5, width: 7, length: 20, from: 0, to: 3.25, yaw: 0.42 },
+      { x: 0, z: -17, width: 8, length: 16, from: 3.25, to: 4.6, yaw: 0 }
+    ]
+  },
+  {
+    key: "city",
+    name: "White Bastion",
+    blurb: "Pale city plaza, clean light, layered rooftops.",
+    spawn: { x: 0, z: 22 },
+    theme: {
+      background: 0xbfd9ee,
+      fog: 0xdbe8f1,
+      fogDensity: 0.006,
+      hemiSky: 0xffffff,
+      hemiGround: 0x8a9aa8,
+      hemiPower: 1.65,
+      sunColor: 0xffffff,
+      sunPower: 1.55,
+      floorColor: 0xcfd5d2,
+      floorEmissive: 0x1f2c32,
+      floorEmissiveIntensity: 0.1
+    },
+    jumpPads: [
+      { x: 0, z: 29, yaw: Math.PI, power: 18, lift: 14.8 },
+      { x: 24, z: 10, yaw: -2.35, power: 16, lift: 13.8 },
+      { x: -24, z: 10, yaw: 2.35, power: 16, lift: 13.8 },
+      { x: 0, z: -30, yaw: 0, power: 20, lift: 15.4 }
+    ],
+    platforms: [
+      { x: -21, z: -5, width: 12, depth: 18, height: 3.2, yaw: 0 },
+      { x: 21, z: -5, width: 12, depth: 18, height: 3.2, yaw: 0 },
+      { x: 0, z: -21, width: 20, depth: 10, height: 5.2, yaw: 0 }
+    ],
+    ramps: [
+      { x: -10, z: 11, width: 7, length: 19, from: 0, to: 3.2, yaw: -0.18 },
+      { x: 10, z: 11, width: 7, length: 19, from: 0, to: 3.2, yaw: 0.18 },
+      { x: 0, z: -13, width: 8, length: 14, from: 3.2, to: 5.2, yaw: 0 }
+    ]
   }
 ];
 const ARENA_BY_KEY = new Map(ARENAS.map((arena) => [arena.key, arena]));
+const PROFILE_KEY = "ironCitadelProgressV1";
+const CHARACTERS = [
+  {
+    key: "vanguard",
+    name: "Ash Vanguard",
+    role: "Balanced starter",
+    unlock: { level: 1, essence: 0, cores: 0 },
+    stats: { health: 18, armor: 10, speed: 0, damage: 0.04, cooldown: 0 },
+    weaponIndex: 0
+  },
+  {
+    key: "sunbreaker",
+    name: "Sunbreaker",
+    role: "Burst damage and bright fire",
+    unlock: { level: 3, essence: 160, cores: 1 },
+    stats: { health: 0, armor: 4, speed: 0.04, damage: 0.12, cooldown: -0.03 },
+    weaponIndex: 3
+  },
+  {
+    key: "riftwalker",
+    name: "Riftwalker",
+    role: "Fast movement and cooldowns",
+    unlock: { level: 5, essence: 260, cores: 2 },
+    stats: { health: -8, armor: 0, speed: 0.16, damage: 0.02, cooldown: -0.12 },
+    weaponIndex: 2
+  },
+  {
+    key: "ironchant",
+    name: "Ironchant",
+    role: "Armor, shield uptime, sustain",
+    unlock: { level: 7, essence: 380, cores: 3 },
+    stats: { health: 28, armor: 30, speed: -0.04, damage: 0, cooldown: -0.08 },
+    weaponIndex: 5
+  },
+  {
+    key: "voidsinger",
+    name: "Voidsinger",
+    role: "Risky high damage scaling",
+    unlock: { level: 10, essence: 620, cores: 5 },
+    stats: { health: -18, armor: -6, speed: 0.08, damage: 0.22, cooldown: -0.06 },
+    weaponIndex: 6
+  }
+];
+const CHARACTER_BY_KEY = new Map(CHARACTERS.map((character) => [character.key, character]));
+const ABILITIES = [
+  {
+    key: "solarPulse",
+    name: "Solar Pulse",
+    type: "active",
+    description: "Auto-blasts nearby enemies with radiant damage.",
+    maxRank: 5
+  },
+  {
+    key: "shardStorm",
+    name: "Shard Storm",
+    type: "active",
+    description: "Launches a short storm of rune shards around you.",
+    maxRank: 5
+  },
+  {
+    key: "magnetDrone",
+    name: "Magnet Drone",
+    type: "active",
+    description: "A drone periodically feeds ammo and sparks targets.",
+    maxRank: 4
+  },
+  {
+    key: "vitalSurge",
+    name: "Vital Surge",
+    type: "passive",
+    description: "Raises maximum health and improves healing.",
+    maxRank: 5
+  },
+  {
+    key: "quicksilver",
+    name: "Quicksilver",
+    type: "passive",
+    description: "Movement speed and jump pad control improve.",
+    maxRank: 5
+  },
+  {
+    key: "gunsmith",
+    name: "Gunsmith",
+    type: "passive",
+    description: "Weapon damage increases.",
+    maxRank: 5
+  },
+  {
+    key: "aegisLoop",
+    name: "Aegis Loop",
+    type: "passive",
+    description: "Shield cooldown drops and armor rewards improve.",
+    maxRank: 4
+  },
+  {
+    key: "scavenger",
+    name: "Scavenger",
+    type: "passive",
+    description: "Kills grant extra ammo and between-run resources.",
+    maxRank: 4
+  }
+];
+const ABILITY_BY_KEY = new Map(ABILITIES.map((ability) => [ability.key, ability]));
 
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 240);
 camera.position.set(0, PLAYER_HEIGHT, 0);
@@ -203,6 +383,14 @@ const state = {
   bossIndex: 0,
   wave: 1,
   arenaKey: ARENAS[0].key,
+  characterKey: CHARACTERS[0].key,
+  combatLevel: 1,
+  combatXp: 0,
+  combatXpNext: 80,
+  pendingLevelUps: 0,
+  levelUpOpen: false,
+  abilityRanks: {},
+  abilityCooldowns: {},
   nextWaveAt: 0,
   fireCooldown: 0,
   shieldCooldown: 0,
@@ -247,6 +435,7 @@ const network = {
 let gameSeed = 1;
 let nextEnemyId = 1;
 let selectedArena = ARENAS[0];
+let profile = loadProfile();
 
 const input = {
   x: 0,
@@ -301,7 +490,9 @@ window.ironCitadelDebug = {
   controls,
   isEnemyHost,
   getWaveEnemyCount,
-  getActiveEnemyTarget
+  getActiveEnemyTarget,
+  gainCombatXp,
+  openLevelUp
 };
 
 function addWorldObject(object) {
@@ -538,12 +729,42 @@ function prewarmEnemyGeometryCache() {
   gameSeed = savedSeed;
 }
 
+function getArenaTheme() {
+  return {
+    background: 0x070504,
+    fog: 0x120806,
+    fogDensity: 0.018,
+    hemiSky: 0x8a5c4b,
+    hemiGround: 0x160807,
+    hemiPower: 1.25,
+    sunColor: 0xffc987,
+    sunPower: 1.15,
+    floorColor: 0xb06d4b,
+    floorEmissive: 0x371008,
+    floorEmissiveIntensity: 0.48,
+    ...(selectedArena.theme ?? {})
+  };
+}
+
+function applyArenaTheme() {
+  const theme = getArenaTheme();
+  scene.background = new THREE.Color(theme.background);
+  scene.fog = new THREE.FogExp2(theme.fog, theme.fogDensity);
+  if (materials.floor) {
+    materials.floor.color.setHex(theme.floorColor);
+    materials.floor.emissive.setHex(theme.floorEmissive);
+    materials.floor.emissiveIntensity = theme.floorEmissiveIntensity;
+  }
+}
+
 function buildWorld() {
   clearWorld();
+  applyArenaTheme();
   addSkybox();
-  addWorldObject(new THREE.HemisphereLight(0x8a5c4b, 0x160807, 1.25));
+  const theme = getArenaTheme();
+  addWorldObject(new THREE.HemisphereLight(theme.hemiSky, theme.hemiGround, theme.hemiPower));
 
-  const sun = new THREE.DirectionalLight(0xffc987, 1.15);
+  const sun = new THREE.DirectionalLight(theme.sunColor, theme.sunPower);
   sun.position.set(-16, 28, 12);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -582,7 +803,11 @@ function buildWorld() {
 }
 
 function addSkybox() {
-  const sky = new THREE.Mesh(geometries.sky, materials.sky);
+  const theme = getArenaTheme();
+  const skyMaterial = selectedArena.theme
+    ? new THREE.MeshBasicMaterial({ color: theme.background, side: THREE.BackSide, fog: false, depthWrite: false })
+    : materials.sky;
+  const sky = new THREE.Mesh(geometries.sky, skyMaterial);
   sky.name = "skybox";
   sky.renderOrder = -1000;
   addWorldObject(sky);
@@ -636,7 +861,7 @@ function addArenaFeatures() {
 }
 
 function addArenaPlatform(platform) {
-  const thickness = 0.72;
+  const thickness = platform.thickness ?? PLATFORM_THICKNESS;
   const group = new THREE.Group();
   group.position.set(platform.x, platform.height - thickness / 2, platform.z);
   group.rotation.y = platform.yaw ?? 0;
@@ -763,8 +988,11 @@ function pushOutOfRectFeature(feature, x, z, padding = PLAYER_RADIUS) {
 
 function resolveArenaSideCollisions(position, feetY) {
   let resolved = false;
+  const headY = feetY + PLAYER_HEIGHT;
 
   for (const platform of selectedArena.platforms ?? []) {
+    const platformBottom = platform.height - (platform.thickness ?? PLATFORM_THICKNESS);
+    if (headY < platformBottom - UNDER_PLATFORM_CLEARANCE) continue;
     if (platform.height <= feetY + PLAYER_STEP_HEIGHT) continue;
     const pushed = pushOutOfRectFeature(platform, position.x, position.z);
     if (!pushed) continue;
@@ -1143,6 +1371,7 @@ function createEmbers() {
 
 function bindEvents() {
   renderArenaSelector();
+  renderCharacterSelector();
   startButton.addEventListener("click", () => {
     if (!state.alive) {
       restart();
@@ -1235,7 +1464,7 @@ function bindEvents() {
 
   controls.addEventListener("unlock", () => {
     state.mouseFireHeld = false;
-    if (state.alive && state.started && !isTouchDevice() && !state.consoleOpen) {
+    if (state.alive && state.started && !isTouchDevice() && !state.consoleOpen && !state.levelUpOpen) {
       overlay.classList.remove("hidden");
       startButton.textContent = "Return to Battle";
     }
@@ -1351,6 +1580,143 @@ function placePlayerAtArenaSpawn() {
   state.verticalVelocity = 0;
   state.grounded = true;
   controls.getObject().position.set(spawn.x, PLAYER_HEIGHT + state.floorY, spawn.z);
+}
+
+function createDefaultProfile() {
+  return {
+    essence: 0,
+    cores: 0,
+    selectedCharacter: CHARACTERS[0].key,
+    unlocked: { [CHARACTERS[0].key]: true },
+    characterXp: Object.fromEntries(CHARACTERS.map((character) => [character.key, 0]))
+  };
+}
+
+function loadProfile() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROFILE_KEY) || "null");
+    const base = createDefaultProfile();
+    return {
+      ...base,
+      ...parsed,
+      unlocked: { ...base.unlocked, ...(parsed?.unlocked ?? {}) },
+      characterXp: { ...base.characterXp, ...(parsed?.characterXp ?? {}) }
+    };
+  } catch {
+    return createDefaultProfile();
+  }
+}
+
+function saveProfile() {
+  localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+}
+
+function getCharacterLevel(key) {
+  return 1 + Math.floor(Math.sqrt((profile.characterXp[key] ?? 0) / 130));
+}
+
+function getAccountLevel() {
+  return Math.max(...CHARACTERS.map((character) => getCharacterLevel(character.key)));
+}
+
+function getSelectedCharacter() {
+  const key = profile.unlocked[profile.selectedCharacter] ? profile.selectedCharacter : CHARACTERS[0].key;
+  return CHARACTER_BY_KEY.get(key) ?? CHARACTERS[0];
+}
+
+function renderCharacterSelector() {
+  const current = getSelectedCharacter();
+  state.characterKey = current.key;
+  progressionStatus.textContent = `Essence ${profile.essence} / Cores ${profile.cores} / Account Lv ${getAccountLevel()}`;
+  characterList.textContent = "";
+
+  for (const character of CHARACTERS) {
+    const unlocked = Boolean(profile.unlocked[character.key]);
+    const level = getCharacterLevel(character.key);
+    const canUnlock =
+      !unlocked &&
+      getAccountLevel() >= character.unlock.level &&
+      profile.essence >= character.unlock.essence &&
+      profile.cores >= character.unlock.cores;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `character-card${character.key === current.key ? " is-selected" : ""}${unlocked ? "" : " is-locked"}`;
+
+    const title = document.createElement("strong");
+    title.textContent = character.name;
+    const role = document.createElement("span");
+    role.textContent = character.role;
+    const meta = document.createElement("small");
+    meta.textContent = unlocked
+      ? `Lv ${level} / ${WEAPONS[character.weaponIndex].name}`
+      : canUnlock
+        ? "Unlock ready"
+        : `Unlock: Lv ${character.unlock.level}, ${character.unlock.essence} essence, ${character.unlock.cores} cores`;
+    button.append(title, role, meta);
+
+    button.addEventListener("click", () => {
+      if (state.started && state.alive) return;
+      if (!profile.unlocked[character.key]) {
+        if (!canUnlock) return;
+        profile.essence -= character.unlock.essence;
+        profile.cores -= character.unlock.cores;
+        profile.unlocked[character.key] = true;
+      }
+      profile.selectedCharacter = character.key;
+      saveProfile();
+      renderCharacterSelector();
+      applyCharacterLoadout();
+    });
+    characterList.appendChild(button);
+  }
+}
+
+function applyCharacterLoadout() {
+  const character = getSelectedCharacter();
+  state.characterKey = character.key;
+  state.weaponIndex = character.weaponIndex;
+  if (state.ownedWeapons) state.ownedWeapons[character.weaponIndex] = true;
+  selectWeapon(character.weaponIndex, true);
+}
+
+function abilityRank(key) {
+  return state.abilityRanks[key] ?? 0;
+}
+
+function getMaxHealth() {
+  const character = getSelectedCharacter();
+  return Math.max(60, 100 + (character.stats.health ?? 0) + abilityRank("vitalSurge") * 20);
+}
+
+function getMaxArmor() {
+  const character = getSelectedCharacter();
+  return Math.max(40, 100 + (character.stats.armor ?? 0) + abilityRank("aegisLoop") * 12);
+}
+
+function getDamageMultiplier() {
+  const character = getSelectedCharacter();
+  return 1 + (character.stats.damage ?? 0) + abilityRank("gunsmith") * 0.11;
+}
+
+function getCooldownMultiplier() {
+  const character = getSelectedCharacter();
+  return Math.max(0.45, 1 + (character.stats.cooldown ?? 0) - abilityRank("aegisLoop") * 0.04);
+}
+
+function getSpeedMultiplier() {
+  const character = getSelectedCharacter();
+  return Math.max(0.65, 1 + (character.stats.speed ?? 0) + abilityRank("quicksilver") * 0.07);
+}
+
+function resetRunProgression() {
+  state.combatLevel = 1;
+  state.combatXp = 0;
+  state.combatXpNext = 80;
+  state.pendingLevelUps = 0;
+  state.levelUpOpen = false;
+  state.abilityRanks = {};
+  state.abilityCooldowns = {};
+  levelUpOverlay.classList.add("hidden");
 }
 
 function releaseMenuFocus() {
@@ -1629,9 +1995,11 @@ function gameRandom() {
 
 function resetRoomGame(seed) {
   setGameSeed(seed);
+  resetRunProgression();
+  applyCharacterLoadout();
   state.alive = true;
-  state.health = 100;
-  state.armor = 75;
+  state.health = getMaxHealth();
+  state.armor = Math.min(getMaxArmor(), 75 + (getSelectedCharacter().stats.armor ?? 0));
   state.ammo = AMMO_MAX;
   state.wave = 1;
   state.kills = 0;
@@ -1925,6 +2293,14 @@ function startGame() {
   releaseMenuFocus();
   if (!state.started) {
     state.started = true;
+    applyCharacterLoadout();
+    if (state.wave === 1 && state.kills === 0) {
+      state.health = getMaxHealth();
+      state.armor = Math.min(getMaxArmor(), 75 + (getSelectedCharacter().stats.armor ?? 0));
+    } else {
+      state.health = Math.min(getMaxHealth(), state.health);
+      state.armor = Math.min(getMaxArmor(), state.armor);
+    }
     if (!network.roomId && isEnemyHost() && enemies.length === 0 && spawnQueue.length === 0 && state.wave === 1 && state.kills === 0) {
       spawnWave();
     }
@@ -2004,8 +2380,8 @@ function runConsoleCommand(rawCommand) {
   if (command === "all") {
     state.ownedWeapons = WEAPONS.map(() => true);
     state.ammo = AMMO_MAX;
-    state.health = 100;
-    state.armor = 100;
+    state.health = getMaxHealth();
+    state.armor = getMaxArmor();
     state.godMode = true;
     logConsole("full kit: guns, ammo, health, armor, god", "ok");
     return;
@@ -2017,12 +2393,12 @@ function runConsoleCommand(rawCommand) {
     return;
   }
   if (command === "heal" || command === "health") {
-    state.health = 100;
+    state.health = getMaxHealth();
     logConsole("health full", "ok");
     return;
   }
   if (command === "armor") {
-    state.armor = 100;
+    state.armor = getMaxArmor();
     logConsole("armor full", "ok");
     return;
   }
@@ -2115,9 +2491,11 @@ function cycleWeapon(direction) {
 }
 
 function restart() {
+  resetRunProgression();
+  applyCharacterLoadout();
   state.alive = true;
-  state.health = 100;
-  state.armor = 75;
+  state.health = getMaxHealth();
+  state.armor = Math.min(getMaxArmor(), 75 + (getSelectedCharacter().stats.armor ?? 0));
   state.ammo = AMMO_MAX;
   state.ownedWeapons = WEAPONS.map(() => true);
   state.weaponIndex = 0;
@@ -2178,10 +2556,104 @@ function queueEnemySpawn(type, index = 0) {
 
 function recordEnemyKill(enemy) {
   state.kills += 1;
+  grantKillProgression(enemy);
+  gainCombatXp(enemy?.boss ? 110 : 18 + state.wave * 3);
   maybeQueueBossSpawn();
   if (enemy?.boss) {
     state.ammo = Math.min(AMMO_MAX, state.ammo + 140);
-    state.armor = Math.min(100, state.armor + 18);
+    state.armor = Math.min(getMaxArmor(), state.armor + 18 + abilityRank("aegisLoop") * 3);
+  }
+}
+
+function grantKillProgression(enemy) {
+  const character = getSelectedCharacter();
+  const scavengerBonus = abilityRank("scavenger");
+  const essenceGain = enemy?.boss ? 34 + scavengerBonus * 5 : 2 + Math.floor(scavengerBonus / 2);
+  const coreGain = enemy?.boss ? 1 : 0;
+  const xpGain = enemy?.boss ? 85 : 8 + state.wave;
+
+  profile.essence += essenceGain;
+  profile.cores += coreGain;
+  profile.characterXp[character.key] = (profile.characterXp[character.key] ?? 0) + xpGain;
+  saveProfile();
+  renderCharacterSelector();
+}
+
+function gainCombatXp(amount) {
+  state.combatXp += amount;
+  while (state.combatXp >= state.combatXpNext) {
+    state.combatXp -= state.combatXpNext;
+    state.combatLevel += 1;
+    state.combatXpNext = Math.floor(state.combatXpNext * 1.22 + 34);
+    state.pendingLevelUps += 1;
+  }
+  if (state.pendingLevelUps > 0 && !state.levelUpOpen) {
+    openLevelUp();
+  }
+}
+
+function getAbilityChoices() {
+  const available = ABILITIES.filter((ability) => abilityRank(ability.key) < ability.maxRank);
+  const choices = [];
+  const pool = [...available];
+  while (pool.length && choices.length < 3) {
+    const index = Math.floor(gameRandom() * pool.length);
+    choices.push(pool.splice(index, 1)[0]);
+  }
+  return choices;
+}
+
+function openLevelUp() {
+  state.levelUpOpen = true;
+  state.mouseFireHeld = false;
+  state.touchFireHeld = false;
+  overlay.classList.add("hidden");
+  if (controls.isLocked) controls.unlock();
+  levelUpTitle.textContent = `Level ${state.combatLevel}`;
+  levelUpChoices.textContent = "";
+  const choices = getAbilityChoices();
+  if (!choices.length) {
+    profile.essence += 50;
+    saveProfile();
+    state.health = getMaxHealth();
+    state.armor = getMaxArmor();
+    state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
+    state.levelUpOpen = false;
+    return;
+  }
+
+  for (const ability of choices) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "ability-card";
+    const title = document.createElement("strong");
+    title.textContent = ability.name;
+    const description = document.createElement("span");
+    description.textContent = ability.description;
+    const meta = document.createElement("small");
+    meta.textContent = `${ability.type} / rank ${abilityRank(ability.key) + 1} of ${ability.maxRank}`;
+    card.append(title, description, meta);
+    card.addEventListener("click", () => chooseAbility(ability.key));
+    levelUpChoices.appendChild(card);
+  }
+
+  levelUpOverlay.classList.remove("hidden");
+}
+
+function chooseAbility(key) {
+  const ability = ABILITY_BY_KEY.get(key);
+  if (!ability) return;
+  state.abilityRanks[key] = Math.min((state.abilityRanks[key] ?? 0) + 1, ability.maxRank);
+  state.pendingLevelUps = Math.max(0, state.pendingLevelUps - 1);
+  levelUpOverlay.classList.add("hidden");
+  state.levelUpOpen = false;
+  state.health = Math.min(getMaxHealth(), state.health + (key === "vitalSurge" ? 20 : 8));
+  state.armor = Math.min(getMaxArmor(), state.armor + (key === "aegisLoop" ? 16 : 5));
+
+  if (state.pendingLevelUps > 0) {
+    window.setTimeout(openLevelUp, 80);
+  } else if (state.started && state.alive && !isTouchDevice()) {
+    controls.lock();
   }
 }
 
@@ -2701,7 +3173,7 @@ function fire() {
   const weapon = WEAPONS[state.weaponIndex];
   if (!state.started || !state.alive || state.fireCooldown > 0 || state.ammo < weapon.cost) return;
   if (!state.infiniteAmmo) state.ammo -= weapon.cost;
-  state.fireCooldown = state.noCooldown ? 0.02 : weapon.cooldown;
+  state.fireCooldown = state.noCooldown ? 0.02 : weapon.cooldown * getCooldownMultiplier();
   state.cameraKick = weapon.cooldown > 0.7 ? 0.075 : 0.044;
   state.shake = Math.max(state.shake, weapon.blastRadius ? 0.06 : 0.035);
   syncMuzzleLightToWeapon();
@@ -2747,7 +3219,7 @@ function fire() {
       mesh: projectile,
       velocity: shotDir.multiplyScalar(weapon.speed),
       ttl: weapon.ttl,
-      damage: weapon.damage,
+      damage: weapon.damage * getDamageMultiplier(),
       pierce: weapon.pierce ?? 0,
       blastRadius: weapon.blastRadius ?? 0,
       gravity: weapon.gravity ?? 0,
@@ -2762,7 +3234,7 @@ function fire() {
 
 function throwShield() {
   if (!state.started || !state.alive || state.shieldCooldown > 0) return;
-  state.shieldCooldown = 4.2;
+  state.shieldCooldown = 4.2 * getCooldownMultiplier();
   state.shieldCharge = 0;
   state.cameraKick = 0.03;
 
@@ -2784,7 +3256,7 @@ function throwShield() {
     mesh,
     velocity: forward.clone().multiplyScalar(39),
     ttl: 1.05,
-    damage: 70,
+    damage: 70 * getDamageMultiplier(),
     pierce: 3,
     color: 0xf3d193,
     weaponIndex: 5,
@@ -2800,7 +3272,15 @@ function animate() {
 }
 
 function update(delta) {
+  if (state.levelUpOpen) {
+    updateInput();
+    updateEffects(delta);
+    updateWeapon(delta);
+    updateHud();
+    return;
+  }
   updateTimers(delta);
+  updateAbilities(delta);
   updateInput();
   if (state.started && state.alive) {
     updatePlayer(delta);
@@ -2818,7 +3298,7 @@ function update(delta) {
 function updateTimers(delta) {
   state.fireCooldown = Math.max(0, state.fireCooldown - delta);
   state.shieldCooldown = Math.max(0, state.shieldCooldown - delta);
-  state.shieldCharge = 1 - state.shieldCooldown / 4.2;
+  state.shieldCharge = 1 - state.shieldCooldown / (4.2 * getCooldownMultiplier());
   state.invulnerable = Math.max(0, state.invulnerable - delta);
   state.spawnTimer = Math.max(0, state.spawnTimer - delta);
   muzzleLight.intensity = THREE.MathUtils.damp(muzzleLight.intensity, 0, 18, delta);
@@ -2845,6 +3325,87 @@ function updateTimers(delta) {
     state.spawnTimer = 3.2 - Math.min(state.wave * 0.12, 1.45);
     queueEnemySpawn(pickEnemyType());
   }
+}
+
+function updateAbilities(delta) {
+  if (!state.started || !state.alive) return;
+  for (const key of Object.keys(state.abilityCooldowns)) {
+    state.abilityCooldowns[key] = Math.max(0, state.abilityCooldowns[key] - delta);
+  }
+  triggerSolarPulse();
+  triggerShardStorm();
+  triggerMagnetDrone();
+}
+
+function triggerSolarPulse() {
+  const rank = abilityRank("solarPulse");
+  if (!rank || state.abilityCooldowns.solarPulse > 0) return;
+  state.abilityCooldowns.solarPulse = Math.max(2.2, 5.6 - rank * 0.45);
+  const origin = controls.getObject().position;
+  const radius = 6.2 + rank * 0.9;
+  const damage = (28 + rank * 12) * getDamageMultiplier();
+  spawnMuzzleSparks(origin.clone().add(new THREE.Vector3(0, -1.2, 0)), worldUp, 34 + rank * 5, 0xffef9a);
+  if (!isEnemyHost()) return;
+  for (let i = enemies.length - 1; i >= 0; i -= 1) {
+    const enemy = enemies[i];
+    if (enemy.group.position.distanceTo(origin) > radius) continue;
+    enemy.health -= damage;
+    spawnBloodHit(enemy.group.position.clone().setY(enemy.group.position.y + 1.35), worldUp, enemy.type, damage);
+    if (enemy.health <= 0) killEnemy(enemy, i);
+  }
+}
+
+function triggerShardStorm() {
+  const rank = abilityRank("shardStorm");
+  if (!rank || state.abilityCooldowns.shardStorm > 0) return;
+  state.abilityCooldowns.shardStorm = Math.max(1.4, 4.8 - rank * 0.38);
+  const origin = controls.getObject().position;
+  const count = 3 + rank;
+  for (let i = 0; i < count; i += 1) {
+    const angle = (i / count) * Math.PI * 2 + clock.elapsedTime;
+    const dir = new THREE.Vector3(Math.sin(angle), 0.05, Math.cos(angle)).normalize();
+    const mesh = new THREE.Mesh(geometries.projectile, materials.rune);
+    mesh.position.copy(origin).add(new THREE.Vector3(0, -0.25, 0)).addScaledVector(dir, 1.1);
+    mesh.scale.setScalar(0.9);
+    scene.add(mesh);
+    projectiles.push({
+      mesh,
+      velocity: dir.multiplyScalar(52 + rank * 4),
+      ttl: 0.75,
+      damage: (22 + rank * 7) * getDamageMultiplier(),
+      pierce: 1 + Math.floor(rank / 2),
+      blastRadius: 0,
+      gravity: 0,
+      color: 0x57ffd7,
+      weaponIndex: 0,
+      shield: false
+    });
+  }
+}
+
+function triggerMagnetDrone() {
+  const rank = abilityRank("magnetDrone");
+  if (!rank || state.abilityCooldowns.magnetDrone > 0) return;
+  state.abilityCooldowns.magnetDrone = Math.max(2.0, 6.2 - rank * 0.55);
+  state.ammo = Math.min(AMMO_MAX, state.ammo + 12 + rank * 8);
+  if (!isEnemyHost() || enemies.length === 0) return;
+  const origin = controls.getObject().position;
+  let bestIndex = -1;
+  let bestDistance = Infinity;
+  for (let i = 0; i < enemies.length; i += 1) {
+    const distance = enemies[i].group.position.distanceTo(origin);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  if (bestIndex < 0 || bestDistance > 24) return;
+  const enemy = enemies[bestIndex];
+  const damage = (34 + rank * 10) * getDamageMultiplier();
+  enemy.health -= damage;
+  spawnMuzzleSparks(enemy.group.position.clone().setY(enemy.group.position.y + 1.6), worldUp, 24, 0x5fffe0);
+  spawnBloodHit(enemy.group.position.clone().setY(enemy.group.position.y + 1.4), worldUp, enemy.type, damage);
+  if (enemy.health <= 0) killEnemy(enemy, bestIndex);
 }
 
 function updateInput() {
@@ -2882,7 +3443,7 @@ function updatePlayer(delta) {
   flatForward.normalize();
   right.crossVectors(flatForward, worldUp).normalize();
 
-  const speed = input.walk ? 7.2 : 10.2;
+  const speed = (input.walk ? 7.2 : 10.2) * getSpeedMultiplier();
   tmpVec.set(0, 0, 0)
     .addScaledVector(flatForward, -input.z)
     .addScaledVector(right, input.x)
@@ -3329,9 +3890,9 @@ function updatePickups(delta) {
     pickup.mesh.rotation.y += delta * 2.4;
     pickup.mesh.position.y = pickup.baseY + Math.sin(clock.elapsedTime * 3 + pickup.phase) * 0.12;
     if (pickup.mesh.position.distanceTo(playerPos) < 2) {
-      if (pickup.kind === "health") state.health = Math.min(100, state.health + 24);
-      if (pickup.kind === "armor") state.armor = Math.min(100, state.armor + 22);
-      if (pickup.kind === "ammo") state.ammo = Math.min(AMMO_MAX, state.ammo + 32);
+      if (pickup.kind === "health") state.health = Math.min(getMaxHealth(), state.health + 24 + abilityRank("vitalSurge") * 4);
+      if (pickup.kind === "armor") state.armor = Math.min(getMaxArmor(), state.armor + 22 + abilityRank("aegisLoop") * 3);
+      if (pickup.kind === "ammo") state.ammo = Math.min(AMMO_MAX, state.ammo + 32 + abilityRank("scavenger") * 8);
       if (pickup.kind === "weapon") {
         state.ownedWeapons[pickup.weaponIndex] = true;
         state.weaponIndex = pickup.weaponIndex;
@@ -3492,9 +4053,9 @@ function updateHud() {
   ammoText.textContent = state.ammo;
   weaponLabel.textContent = `${state.weaponIndex + 1} ${WEAPONS[state.weaponIndex].name}`.toUpperCase();
   killText.textContent = `${state.kills}`;
-  waveText.textContent = `WAVE ${roman[state.wave - 1] ?? state.wave}`;
-  healthBar.style.transform = `scaleX(${THREE.MathUtils.clamp(state.health / 100, 0, 1)})`;
-  armorBar.style.transform = `scaleX(${THREE.MathUtils.clamp(state.armor / 100, 0, 1)})`;
+  waveText.textContent = `LV ${state.combatLevel} / WAVE ${roman[state.wave - 1] ?? state.wave}`;
+  healthBar.style.transform = `scaleX(${THREE.MathUtils.clamp(state.health / getMaxHealth(), 0, 1)})`;
+  armorBar.style.transform = `scaleX(${THREE.MathUtils.clamp(state.armor / getMaxArmor(), 0, 1)})`;
   shieldCooldown.style.transform = `scaleX(${THREE.MathUtils.clamp(state.shieldCharge, 0, 1)})`;
 }
 

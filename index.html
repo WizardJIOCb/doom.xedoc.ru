@@ -19,6 +19,11 @@
           <div class="arena-heading">Choose Arena</div>
           <div id="arenaList" class="arena-list"></div>
         </div>
+        <div class="character-panel">
+          <div class="arena-heading">Choose Slayer</div>
+          <div id="progressionStatus" class="progression-status"></div>
+          <div id="characterList" class="character-list"></div>
+        </div>
         <button id="startButton" type="button">Enter the Citadel</button>
         <div class="lobby-panel">
           <div class="lobby-row">
@@ -60,6 +65,14 @@
 
       <div id="damageVignette" class="damage-vignette"></div>
       <div id="hitFlash" class="hit-flash"></div>
+
+      <div id="levelUpOverlay" class="level-up-overlay hidden">
+        <div class="level-up-panel">
+          <span>ASCENSION</span>
+          <strong id="levelUpTitle">Choose Power</strong>
+          <div id="levelUpChoices" class="level-up-choices"></div>
+        </div>
+      </div>
 
       <div id="cheatConsole" class="cheat-console hidden">
         <div id="consoleLog" class="console-log"></div>

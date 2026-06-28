@@ -6,7 +6,7 @@ const clients = new Map();
 const rooms = new Map();
 let nextId = 1;
 let nextRoomId = 1;
-const ARENA_KEYS = new Set(["forge", "rift", "spire"]);
+const ARENA_KEYS = new Set(["forge", "rift", "spire", "dunes", "city"]);
 
 function cleanName(value, fallback) {
   return String(value || fallback)

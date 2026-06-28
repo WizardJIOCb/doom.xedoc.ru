@@ -36,13 +36,14 @@ button {
   inset: 0;
   display: grid;
   place-content: center;
-  gap: 22px;
-  padding: 32px;
+  gap: clamp(10px, 2vh, 18px);
+  padding: clamp(16px, 3vw, 36px);
   text-align: center;
   background:
     radial-gradient(circle at 50% 55%, rgba(174, 29, 12, 0.34), transparent 33%),
     linear-gradient(180deg, rgba(4, 3, 2, 0.56), rgba(4, 3, 2, 0.88));
   z-index: 10;
+  overflow-y: auto;
 }
 
 .overlay.hidden {
@@ -76,8 +77,8 @@ button {
 
 .overlay h1 {
   margin: 0;
-  max-width: 900px;
-  font-size: clamp(3rem, 10vw, 8.6rem);
+  max-width: min(900px, 94vw);
+  font-size: clamp(2.8rem, 8.6vw, 7.4rem);
   line-height: 0.86;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -101,7 +102,7 @@ button {
 }
 
 .arena-panel {
-  width: min(900px, 94vw);
+  width: min(940px, calc(100vw - 56px));
   justify-self: center;
   display: grid;
   gap: 10px;
@@ -117,13 +118,15 @@ button {
 
 .arena-list {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: 10px;
 }
 
 .arena-card {
   min-width: 0;
-  min-height: 96px;
+  width: 100%;
+  justify-self: stretch;
+  min-height: 76px;
   border: 1px solid rgba(205, 147, 74, 0.34);
   border-radius: 6px;
   padding: 10px;
@@ -132,6 +135,11 @@ button {
   box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.28);
   text-align: left;
   cursor: pointer;
+}
+
+.overlay .arena-card,
+.overlay .character-card {
+  min-width: 0;
 }
 
 .arena-card strong,
@@ -161,6 +169,81 @@ button {
   box-shadow:
     inset 0 0 22px rgba(53, 246, 208, 0.12),
     0 0 22px rgba(53, 246, 208, 0.18);
+}
+
+.character-panel {
+  width: min(980px, calc(100vw - 56px));
+  justify-self: center;
+  display: grid;
+  gap: 8px;
+}
+
+.progression-status {
+  color: #d9fff7;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.character-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.character-card {
+  min-width: 0;
+  width: 100%;
+  justify-self: stretch;
+  min-height: 108px;
+  border: 1px solid rgba(205, 147, 74, 0.34);
+  border-radius: 6px;
+  padding: 10px;
+  color: #f7eee0;
+  background: linear-gradient(180deg, rgba(15, 12, 10, 0.8), rgba(8, 5, 4, 0.72));
+  text-align: left;
+  cursor: pointer;
+}
+
+.character-card strong,
+.character-card span,
+.character-card small {
+  display: block;
+}
+
+.character-card strong {
+  color: #fff3df;
+  font-size: 0.82rem;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.character-card span {
+  margin-top: 6px;
+  color: #d4a567;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.22;
+}
+
+.character-card small {
+  margin-top: 7px;
+  color: #8fffe7;
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.character-card.is-selected {
+  border-color: rgba(85, 230, 199, 0.86);
+  background: linear-gradient(180deg, rgba(18, 58, 52, 0.82), rgba(8, 5, 4, 0.75));
+  box-shadow: 0 0 22px rgba(53, 246, 208, 0.16);
+}
+
+.character-card.is-locked {
+  opacity: 0.66;
 }
 
 .lobby-panel {
@@ -196,6 +279,11 @@ button {
 
 @media (max-width: 720px) {
   .arena-list {
+    grid-template-columns: 1fr;
+  }
+
+  .character-list,
+  .level-up-choices {
     grid-template-columns: 1fr;
   }
 
@@ -399,6 +487,88 @@ button {
   transition: opacity 90ms ease;
 }
 
+.level-up-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 18;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(circle at 50% 45%, rgba(85, 230, 199, 0.16), rgba(5, 4, 3, 0.72));
+}
+
+.level-up-overlay.hidden {
+  display: none;
+}
+
+.level-up-panel {
+  width: min(860px, 94vw);
+  border: 1px solid rgba(85, 230, 199, 0.46);
+  border-radius: 8px;
+  padding: 18px;
+  background: rgba(6, 7, 6, 0.9);
+  box-shadow: 0 0 48px rgba(53, 246, 208, 0.16);
+  text-align: center;
+}
+
+.level-up-panel span {
+  color: #55e6c7;
+  font-size: 0.76rem;
+  font-weight: 950;
+  letter-spacing: 0.16em;
+}
+
+.level-up-panel strong {
+  display: block;
+  margin: 4px 0 14px;
+  color: #fff3df;
+  font-size: clamp(1.4rem, 4vw, 2.4rem);
+  text-transform: uppercase;
+}
+
+.level-up-choices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ability-card {
+  min-height: 150px;
+  border: 1px solid rgba(248, 198, 112, 0.46);
+  border-radius: 6px;
+  padding: 12px;
+  color: #fff3df;
+  background: linear-gradient(180deg, rgba(31, 18, 11, 0.92), rgba(7, 6, 5, 0.88));
+  text-align: left;
+  cursor: pointer;
+}
+
+.ability-card strong,
+.ability-card span,
+.ability-card small {
+  display: block;
+}
+
+.ability-card strong {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+}
+
+.ability-card span {
+  margin-top: 7px;
+  color: #d4a567;
+  font-size: 0.78rem;
+  line-height: 1.32;
+}
+
+.ability-card small {
+  margin-top: 10px;
+  color: #55e6c7;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .cheat-console {
   position: fixed;
   left: 18px;
@@ -567,5 +737,25 @@ button {
 
   .overlay {
     padding: 20px;
+  }
+}
+
+@media (max-height: 820px) {
+  .brand {
+    transform: scale(0.9);
+  }
+
+  .overlay h1 {
+    font-size: clamp(2.5rem, 7.6vw, 6.3rem);
+  }
+
+  .arena-card,
+  .character-card {
+    min-height: 70px;
+    padding: 9px 10px;
+  }
+
+  .character-card span {
+    display: none;
   }
 }
