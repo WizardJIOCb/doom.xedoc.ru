@@ -65,6 +65,7 @@ const PLAYER_HEIGHT = 2.2;
 const PLAYER_STEP_HEIGHT = 0.72;
 const SURFACE_SNAP_HEIGHT = 0.16;
 const PLATFORM_THICKNESS = 0.72;
+const RAMP_THICKNESS = 0.46;
 const UNDER_PLATFORM_CLEARANCE = 0.22;
 const MAX_ENEMIES = 72;
 const WAVE_BASE_ENEMIES = 10;
@@ -344,6 +345,17 @@ const muzzleLocalTmp = new THREE.Vector3();
 const projectilePrevPos = new THREE.Vector3();
 const projectileImpactPos = new THREE.Vector3();
 const projectileImpactNormal = new THREE.Vector3();
+const projectileFeatureCenter = new THREE.Vector3();
+const projectileFeatureEuler = new THREE.Euler();
+const projectileFeatureQuat = new THREE.Quaternion();
+const projectileFeatureScale = new THREE.Vector3(1, 1, 1);
+const projectileFeatureMatrix = new THREE.Matrix4();
+const projectileFeatureInverse = new THREE.Matrix4();
+const projectileLocalFrom = new THREE.Vector3();
+const projectileLocalTo = new THREE.Vector3();
+const projectileLocalDelta = new THREE.Vector3();
+const projectileLocalHit = new THREE.Vector3();
+const projectileLocalNormal = new THREE.Vector3();
 const decalNormalTmp = new THREE.Vector3();
 const worldUp = new THREE.Vector3(0, 1, 0);
 const ragdollCornerTmp = new THREE.Vector3();
@@ -494,7 +506,10 @@ window.ironCitadelDebug = {
   getWaveEnemyCount,
   getActiveEnemyTarget,
   gainCombatXp,
-  openLevelUp
+  openLevelUp,
+  getProjectileWorldImpact,
+  projectileImpactPos,
+  projectileImpactNormal
 };
 
 function addWorldObject(object) {
@@ -896,7 +911,7 @@ function addArenaPlatform(platform) {
 function addArenaRamp(ramp) {
   const rise = ramp.to - ramp.from;
   const angle = Math.atan2(rise, ramp.length);
-  const thickness = 0.46;
+  const thickness = RAMP_THICKNESS;
   const group = new THREE.Group();
   group.position.set(ramp.x, (ramp.from + ramp.to) / 2 - thickness * 0.25, ramp.z);
   group.rotation.y = ramp.yaw ?? 0;
@@ -3759,11 +3774,145 @@ function getProjectileRadius(shot) {
   return 0.16 * Math.max(shot.mesh?.scale?.x ?? 1, 0.8);
 }
 
+function getSegmentBoxImpact(from, to, matrix, halfX, halfY, halfZ) {
+  projectileFeatureInverse.copy(matrix).invert();
+  projectileLocalFrom.copy(from).applyMatrix4(projectileFeatureInverse);
+  projectileLocalTo.copy(to).applyMatrix4(projectileFeatureInverse);
+  projectileLocalDelta.subVectors(projectileLocalTo, projectileLocalFrom);
+
+  let tMin = 0;
+  let tMax = 1;
+  let normalAxis = -1;
+  let normalSign = 0;
+  const startsInside =
+    Math.abs(projectileLocalFrom.x) <= halfX &&
+    Math.abs(projectileLocalFrom.y) <= halfY &&
+    Math.abs(projectileLocalFrom.z) <= halfZ;
+
+  const testAxis = (start, delta, half, axis) => {
+    if (Math.abs(delta) < 0.00001) return Math.abs(start) <= half;
+
+    let near = (-half - start) / delta;
+    let far = (half - start) / delta;
+    let sign = -1;
+    if (near > far) {
+      const swap = near;
+      near = far;
+      far = swap;
+      sign = 1;
+    }
+
+    if (near > tMin) {
+      tMin = near;
+      normalAxis = axis;
+      normalSign = sign;
+    }
+    tMax = Math.min(tMax, far);
+    return tMin <= tMax;
+  };
+
+  if (!testAxis(projectileLocalFrom.x, projectileLocalDelta.x, halfX, 0)) return null;
+  if (!testAxis(projectileLocalFrom.y, projectileLocalDelta.y, halfY, 1)) return null;
+  if (!testAxis(projectileLocalFrom.z, projectileLocalDelta.z, halfZ, 2)) return null;
+  if (tMax < 0 || tMin > 1) return null;
+
+  const t = THREE.MathUtils.clamp(startsInside ? tMax : tMin, 0, 1);
+  projectileLocalHit.copy(projectileLocalFrom).addScaledVector(projectileLocalDelta, t);
+  projectileLocalNormal.set(0, 0, 0);
+  if (normalAxis === 0) projectileLocalNormal.x = normalSign;
+  if (normalAxis === 1) projectileLocalNormal.y = normalSign;
+  if (normalAxis === 2) projectileLocalNormal.z = normalSign;
+  if (projectileLocalNormal.lengthSq() < 0.001) {
+    projectileLocalNormal.copy(projectileLocalDelta).multiplyScalar(-1);
+  }
+  projectileLocalNormal.transformDirection(matrix).normalize();
+  return { t, position: projectileLocalHit.applyMatrix4(matrix), normal: projectileLocalNormal };
+}
+
+function getProjectileRampImpact(from, to, ramp, radius) {
+  const yaw = -(ramp.yaw ?? 0);
+  const sin = Math.sin(yaw);
+  const cos = Math.cos(yaw);
+  const fromDx = from.x - ramp.x;
+  const fromDz = from.z - ramp.z;
+  const toDx = to.x - ramp.x;
+  const toDz = to.z - ramp.z;
+  const fromX = fromDx * cos - fromDz * sin;
+  const fromZ = fromDx * sin + fromDz * cos;
+  const toX = toDx * cos - toDz * sin;
+  const toZ = toDx * sin + toDz * cos;
+  const deltaX = toX - fromX;
+  const deltaZ = toZ - fromZ;
+
+  let tMin = 0;
+  let tMax = 1;
+  const clampInterval = (start, delta, min, max) => {
+    if (Math.abs(delta) < 0.00001) return start >= min && start <= max;
+    let near = (min - start) / delta;
+    let far = (max - start) / delta;
+    if (near > far) {
+      const swap = near;
+      near = far;
+      far = swap;
+    }
+    tMin = Math.max(tMin, near);
+    tMax = Math.min(tMax, far);
+    return tMin <= tMax;
+  };
+
+  if (!clampInterval(fromX, deltaX, -ramp.width / 2 - radius, ramp.width / 2 + radius)) return null;
+  if (!clampInterval(fromZ, deltaZ, -ramp.length / 2 - radius, ramp.length / 2 + radius)) return null;
+
+  const slope = (ramp.to - ramp.from) / ramp.length;
+  const signedFrom = from.y - (ramp.from + slope * (fromZ + ramp.length / 2));
+  const signedTo = to.y - (ramp.from + slope * (toZ + ramp.length / 2));
+  const signedDelta = signedTo - signedFrom;
+  let distanceTMin = 0;
+  let distanceTMax = 1;
+  let normalSign = signedDelta < 0 ? 1 : -1;
+
+  if (Math.abs(signedDelta) < 0.00001) {
+    if (signedFrom < -RAMP_THICKNESS - radius || signedFrom > radius) return null;
+  } else {
+    let near = (-RAMP_THICKNESS - radius - signedFrom) / signedDelta;
+    let far = (radius - signedFrom) / signedDelta;
+    if (near > far) {
+      const swap = near;
+      near = far;
+      far = swap;
+      normalSign = 1;
+    } else {
+      normalSign = -1;
+    }
+    distanceTMin = near;
+    distanceTMax = far;
+  }
+
+  tMin = Math.max(tMin, distanceTMin);
+  tMax = Math.min(tMax, distanceTMax);
+  if (tMax < 0 || tMin > 1 || tMin > tMax) return null;
+
+  const t = THREE.MathUtils.clamp(tMin, 0, 1);
+  projectileImpactPos.lerpVectors(from, to, t);
+
+  projectileLocalNormal.set(0, normalSign, -slope * normalSign).normalize();
+  const worldYaw = ramp.yaw ?? 0;
+  const worldSin = Math.sin(worldYaw);
+  const worldCos = Math.cos(worldYaw);
+  projectileImpactNormal.set(
+    projectileLocalNormal.x * worldCos - projectileLocalNormal.z * worldSin,
+    projectileLocalNormal.y,
+    projectileLocalNormal.x * worldSin + projectileLocalNormal.z * worldCos
+  ).normalize();
+
+  return { t, position: projectileImpactPos, normal: projectileImpactNormal };
+}
+
 function getProjectileWorldImpact(shot, from, to) {
   const radius = getProjectileRadius(shot);
   let bestT = Infinity;
   let bestKind = "";
-  const floorY = getArenaFloorHeight(to.x, to.z) + 0.08 + radius * 0.28;
+  const floorY = 0.08 + radius * 0.28;
 
   const useImpact = (kind, t, x, y, z, nx, ny, nz) => {
     if (t < 0 || t > 1 || t >= bestT) return;
@@ -3799,6 +3948,30 @@ function getProjectileWorldImpact(shot, from, to) {
       0,
       -projectileImpactPos.z / outward
     );
+  }
+
+  for (const platform of selectedArena.platforms ?? []) {
+    const thickness = platform.thickness ?? PLATFORM_THICKNESS;
+    projectileFeatureCenter.set(platform.x, platform.height - thickness / 2, platform.z);
+    projectileFeatureEuler.set(0, platform.yaw ?? 0, 0);
+    projectileFeatureQuat.setFromEuler(projectileFeatureEuler);
+    projectileFeatureMatrix.compose(projectileFeatureCenter, projectileFeatureQuat, projectileFeatureScale);
+    const impact = getSegmentBoxImpact(
+      from,
+      to,
+      projectileFeatureMatrix,
+      platform.width / 2 + radius,
+      thickness / 2 + radius,
+      platform.depth / 2 + radius
+    );
+    if (!impact) continue;
+    useImpact("platform", impact.t, impact.position.x, impact.position.y, impact.position.z, impact.normal.x, impact.normal.y, impact.normal.z);
+  }
+
+  for (const ramp of selectedArena.ramps ?? []) {
+    const impact = getProjectileRampImpact(from, to, ramp, radius);
+    if (!impact) continue;
+    useImpact("ramp", impact.t, impact.position.x, impact.position.y, impact.position.z, impact.normal.x, impact.normal.y, impact.normal.z);
   }
 
   const dx = to.x - from.x;
