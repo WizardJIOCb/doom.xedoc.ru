@@ -45,6 +45,7 @@ const shieldCooldown = document.querySelector("#shieldCooldown");
 const scoreboard = document.querySelector("#scoreboard");
 const scoreboardRows = document.querySelector("#scoreboardRows");
 const damageVignette = document.querySelector("#damageVignette");
+const deathBloodOverlay = document.querySelector("#deathBloodOverlay");
 const hitFlash = document.querySelector("#hitFlash");
 const cheatConsole = document.querySelector("#cheatConsole");
 const consoleLog = document.querySelector("#consoleLog");
@@ -468,6 +469,14 @@ const state = {
   invulnerable: 0,
   cameraKick: 0,
   shake: 0,
+  deathCamTime: 0,
+  deathCamActive: false,
+  deathCamStartY: PLAYER_HEIGHT,
+  deathCamTargetY: 0.42,
+  deathCamRoll: 0,
+  deathCamPitch: 0,
+  deathOverlayDelay: 0,
+  deathBloodOpacity: 0,
   verticalVelocity: 0,
   jumpOffset: 0,
   floorY: 0,
@@ -2645,6 +2654,7 @@ function gameRandom() {
 
 function resetRoomGame(seed) {
   setGameSeed(seed);
+  resetDeathEffects();
   resetRunProgression();
   applyCharacterLoadout();
   state.alive = true;
@@ -3022,6 +3032,56 @@ function startGame() {
   tryLockControls();
 }
 
+function resetDeathEffects() {
+  state.deathCamTime = 0;
+  state.deathCamActive = false;
+  state.deathOverlayDelay = 0;
+  state.deathBloodOpacity = 0;
+  camera.rotation.x = 0;
+  camera.rotation.z = 0;
+  weaponRig.rotation.z = 0;
+  deathBloodOverlay.style.opacity = "0";
+}
+
+function startDeathEffects() {
+  const object = controls.getObject();
+  const floorY = getArenaFloorHeight(object.position.x, object.position.z);
+  state.deathCamTime = 0;
+  state.deathCamActive = true;
+  state.deathCamStartY = object.position.y;
+  state.deathCamTargetY = floorY + 0.42;
+  state.deathCamRoll = (gameRandom() > 0.5 ? 1 : -1) * (1.12 + gameRandom() * 0.34);
+  state.deathCamPitch = THREE.MathUtils.clamp(camera.rotation.x + 0.72, -0.95, 1.08);
+  state.deathOverlayDelay = 1.08;
+  state.deathBloodOpacity = 1;
+  state.shake = Math.max(state.shake, 0.28);
+  deathBloodOverlay.style.opacity = "1";
+  overlay.classList.add("hidden");
+}
+
+function updateDeathEffects(delta) {
+  if (!state.deathCamActive) return;
+  state.deathCamTime += delta;
+  const object = controls.getObject();
+  const fallT = THREE.MathUtils.smoothstep(Math.min(state.deathCamTime / 0.9, 1), 0, 1);
+  object.position.y = THREE.MathUtils.lerp(state.deathCamStartY, state.deathCamTargetY, fallT);
+  object.rotation.y += delta * 0.16 * Math.sin(state.deathCamTime * 3.7);
+  camera.rotation.x = THREE.MathUtils.damp(camera.rotation.x, state.deathCamPitch, 6.5, delta);
+  camera.rotation.z = THREE.MathUtils.damp(camera.rotation.z, state.deathCamRoll, 7.2, delta);
+  weaponRig.position.y = THREE.MathUtils.damp(weaponRig.position.y, WEAPON_BASE_POSITION.y - 0.42, 8, delta);
+  weaponRig.rotation.z = THREE.MathUtils.damp(weaponRig.rotation.z, -state.deathCamRoll * 0.45, 8, delta);
+
+  if (state.deathCamTime > 0.85) {
+    state.deathBloodOpacity = THREE.MathUtils.damp(state.deathBloodOpacity, 0.24, 0.72, delta);
+  }
+  deathBloodOverlay.style.opacity = `${THREE.MathUtils.clamp(state.deathBloodOpacity, 0, 1)}`;
+
+  state.deathOverlayDelay = Math.max(0, state.deathOverlayDelay - delta);
+  if (state.deathOverlayDelay <= 0 && overlay.classList.contains("hidden")) {
+    overlay.classList.remove("hidden");
+  }
+}
+
 function tryLockControls() {
   if (isTouchDevice() || controls.isLocked || state.levelUpOpen) return false;
   if (performance.now() - lastPointerUnlockAt < 250) return false;
@@ -3252,6 +3312,7 @@ function cycleWeapon(direction) {
 }
 
 function restart() {
+  resetDeathEffects();
   resetRunProgression();
   applyCharacterLoadout();
   state.alive = true;
@@ -4252,6 +4313,7 @@ function update(delta) {
   updatePickups(delta);
   updateEffects(delta);
   updateWeapon(delta);
+  updateDeathEffects(delta);
   updateNetwork(delta);
   updateScoreboard(delta);
   updateHud();
@@ -5296,10 +5358,10 @@ function die() {
   updateProfileCombatBest(state.wave);
   saveProfile();
   state.health = 0;
+  startDeathEffects();
   if (network.roomId && isEnemyHost()) {
     sendNetworkMessage({ type: "host-dead" });
   }
-  overlay.classList.remove("hidden");
   startButton.textContent = "Rise Again";
   unlockPointer();
 }
