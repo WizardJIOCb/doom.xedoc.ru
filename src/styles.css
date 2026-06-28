@@ -237,6 +237,10 @@ button {
   min-width: 0;
 }
 
+.overlay .character-card {
+  min-height: 108px;
+}
+
 .arena-card strong,
 .arena-card span {
   display: block;
@@ -291,6 +295,8 @@ button {
   min-width: 0;
   width: 100%;
   justify-self: stretch;
+  display: grid;
+  align-content: start;
   min-height: 108px;
   border: 1px solid rgba(205, 147, 74, 0.34);
   border-radius: 6px;
@@ -329,6 +335,7 @@ button {
   font-weight: 900;
   line-height: 1.2;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
 }
 
 .character-card.is-selected {
@@ -463,7 +470,8 @@ button {
   }
 
   .character-list {
-    max-height: min(24vh, 220px);
+    gap: 8px;
+    max-height: min(26vh, 250px);
     overflow-y: auto;
   }
 
@@ -480,17 +488,23 @@ button {
     margin-top: 4px;
   }
 
-  .character-card {
-    min-height: 70px;
-    padding: 8px 10px;
+  .overlay .character-card {
+    min-height: 82px;
+    padding: 8px 10px 9px;
+    grid-template-rows: auto auto 1fr;
   }
 
   .character-card span {
-    margin-top: 4px;
+    margin-top: 3px;
+    font-size: 0.64rem;
+    line-height: 1.15;
   }
 
   .character-card small {
-    margin-top: 5px;
+    align-self: end;
+    margin-top: 6px;
+    font-size: 0.58rem;
+    line-height: 1.15;
   }
 
   .overlay > #startButton {
@@ -1289,13 +1303,24 @@ button {
     font-size: clamp(2.5rem, 7.6vw, 6.3rem);
   }
 
-  .arena-card,
-  .character-card {
-    min-height: 70px;
+  .arena-card {
+    min-height: 82px;
+    padding: 9px 10px;
+  }
+
+  .overlay .character-card {
+    min-height: 82px;
     padding: 9px 10px;
   }
 
   .character-card span {
-    display: none;
+    display: block;
+    font-size: 0.62rem;
+    line-height: 1.12;
+  }
+
+  .character-card small {
+    font-size: 0.56rem;
+    line-height: 1.12;
   }
 }
