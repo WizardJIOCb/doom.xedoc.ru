@@ -57,6 +57,8 @@ const ARENA_RADIUS = 42;
 const ENEMY_HIT_RADIUS = 1.15;
 const PLAYER_RADIUS = 1.05;
 const PLAYER_HEIGHT = 2.2;
+const PLAYER_STEP_HEIGHT = 0.72;
+const SURFACE_SNAP_HEIGHT = 0.16;
 const MAX_ENEMIES = 72;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
@@ -260,6 +262,7 @@ const input = {
 
 const materials = {};
 const geometries = {};
+const geometryCache = new Map();
 const sparkMaterials = new Map();
 const bloodMaterials = new Map();
 const sparkPool = [];
@@ -275,6 +278,7 @@ const ENEMY_EMERGE_TIME = 0.65;
 let spawnDripTimer = 0;
 
 initAssets();
+prewarmEnemyGeometryCache();
 buildWorld();
 bindEvents();
 initNetwork();
@@ -490,6 +494,50 @@ function initAssets() {
   }
 }
 
+function cachedGeometry(key, createGeometry) {
+  let geometry = geometryCache.get(key);
+  if (!geometry) {
+    geometry = createGeometry();
+    geometryCache.set(key, geometry);
+  }
+  return geometry;
+}
+
+function boxGeometry(width, height, depth) {
+  return cachedGeometry(`box:${width}:${height}:${depth}`, () => new THREE.BoxGeometry(width, height, depth));
+}
+
+function coneGeometry(radius, height, radialSegments) {
+  return cachedGeometry(`cone:${radius}:${height}:${radialSegments}`, () => new THREE.ConeGeometry(radius, height, radialSegments));
+}
+
+function dodecahedronGeometry(radius, detail = 0) {
+  return cachedGeometry(`dodecahedron:${radius}:${detail}`, () => new THREE.DodecahedronGeometry(radius, detail));
+}
+
+function octahedronGeometry(radius, detail = 0) {
+  return cachedGeometry(`octahedron:${radius}:${detail}`, () => new THREE.OctahedronGeometry(radius, detail));
+}
+
+function torusGeometry(radius, tube, radialSegments, tubularSegments) {
+  return cachedGeometry(
+    `torus:${radius}:${tube}:${radialSegments}:${tubularSegments}`,
+    () => new THREE.TorusGeometry(radius, tube, radialSegments, tubularSegments)
+  );
+}
+
+function circleGeometry(radius, segments) {
+  return cachedGeometry(`circle:${radius}:${segments}`, () => new THREE.CircleGeometry(radius, segments));
+}
+
+function prewarmEnemyGeometryCache() {
+  const savedSeed = gameSeed;
+  for (const type of ENEMY_TYPES) {
+    createEnemy(type);
+  }
+  gameSeed = savedSeed;
+}
+
 function buildWorld() {
   clearWorld();
   addSkybox();
@@ -653,6 +701,16 @@ function toArenaLocal(feature, x, z) {
   };
 }
 
+function fromArenaLocal(feature, x, z) {
+  const yaw = feature.yaw ?? 0;
+  const sin = Math.sin(yaw);
+  const cos = Math.cos(yaw);
+  return {
+    x: feature.x + x * cos - z * sin,
+    z: feature.z + x * sin + z * cos
+  };
+}
+
 function pointInRectFeature(feature, x, z, padding = 0) {
   const local = toArenaLocal(feature, x, z);
   return Math.abs(local.x) <= feature.width / 2 + padding && Math.abs(local.z) <= feature.depth / 2 + padding;
@@ -665,26 +723,67 @@ function getRampHeightAt(ramp, x, z, padding = 0) {
   return THREE.MathUtils.lerp(ramp.from, ramp.to, t);
 }
 
-function getArenaSurface(x, z) {
+function getArenaSurface(x, z, reachableY = Infinity) {
   let height = 0;
   let kind = "floor";
 
   for (const ramp of selectedArena.ramps ?? []) {
     const rampHeight = getRampHeightAt(ramp, x, z, PLAYER_RADIUS * 0.25);
-    if (rampHeight !== null && rampHeight >= height) {
+    if (rampHeight !== null && rampHeight <= reachableY && rampHeight >= height) {
       height = rampHeight;
       kind = "ramp";
     }
   }
 
   for (const platform of selectedArena.platforms ?? []) {
-    if (pointInRectFeature(platform, x, z, PLAYER_RADIUS * 0.2) && platform.height >= height) {
+    if (platform.height <= reachableY && pointInRectFeature(platform, x, z, PLAYER_RADIUS * 0.2) && platform.height >= height) {
       height = platform.height;
       kind = "platform";
     }
   }
 
   return { height, kind };
+}
+
+function pushOutOfRectFeature(feature, x, z, padding = PLAYER_RADIUS) {
+  const local = toArenaLocal(feature, x, z);
+  const halfW = feature.width / 2 + padding;
+  const halfD = feature.depth / 2 + padding;
+  if (Math.abs(local.x) > halfW || Math.abs(local.z) > halfD) return null;
+
+  const pushX = halfW - Math.abs(local.x);
+  const pushZ = halfD - Math.abs(local.z);
+  if (pushX < pushZ) {
+    local.x = (local.x < 0 ? -1 : 1) * (halfW + 0.01);
+  } else {
+    local.z = (local.z < 0 ? -1 : 1) * (halfD + 0.01);
+  }
+  return fromArenaLocal(feature, local.x, local.z);
+}
+
+function resolveArenaSideCollisions(position, feetY) {
+  let resolved = false;
+
+  for (const platform of selectedArena.platforms ?? []) {
+    if (platform.height <= feetY + PLAYER_STEP_HEIGHT) continue;
+    const pushed = pushOutOfRectFeature(platform, position.x, position.z);
+    if (!pushed) continue;
+    position.x = pushed.x;
+    position.z = pushed.z;
+    resolved = true;
+  }
+
+  for (const ramp of selectedArena.ramps ?? []) {
+    const rampHeight = getRampHeightAt(ramp, position.x, position.z, PLAYER_RADIUS);
+    if (rampHeight === null || rampHeight <= feetY + PLAYER_STEP_HEIGHT) continue;
+    const pushed = pushOutOfRectFeature({ ...ramp, depth: ramp.length }, position.x, position.z);
+    if (!pushed) continue;
+    position.x = pushed.x;
+    position.z = pushed.z;
+    resolved = true;
+  }
+
+  return resolved;
 }
 
 function getArenaFloorHeight(x, z) {
@@ -2321,12 +2420,12 @@ function createEnemy(type) {
   body.castShadow = true;
   group.add(body);
 
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(1.16 * scale * stats.width, 0.44 * scale, 0.96 * scale), trimMat);
+  const chest = new THREE.Mesh(boxGeometry(1.16 * scale * stats.width, 0.44 * scale, 0.96 * scale), trimMat);
   chest.position.set(0, 2.02 * scale, 0.02);
   chest.castShadow = true;
   group.add(chest);
 
-  const waist = new THREE.Mesh(new THREE.BoxGeometry(0.92 * scale, 0.26 * scale, 0.7 * scale), materials.metal);
+  const waist = new THREE.Mesh(boxGeometry(0.92 * scale, 0.26 * scale, 0.7 * scale), materials.metal);
   waist.position.set(0, 0.88 * scale, 0);
   waist.castShadow = true;
   group.add(waist);
@@ -2338,13 +2437,13 @@ function createEnemy(type) {
   group.add(head);
 
   for (let s = -1; s <= 1; s += 2) {
-    const eye = new THREE.Mesh(new THREE.BoxGeometry(0.12 * scale, 0.08 * scale, 0.04 * scale), materials.rune);
+    const eye = new THREE.Mesh(boxGeometry(0.12 * scale, 0.08 * scale, 0.04 * scale), materials.rune);
     eye.position.set(s * 0.18 * scale, 2.78 * scale, 0.4 * scale);
     group.add(eye);
   }
 
   for (let s = -1; s <= 1; s += 2) {
-    const horn = new THREE.Mesh(new THREE.ConeGeometry(0.14 * scale, 0.72 * scale, 5), trimMat);
+    const horn = new THREE.Mesh(coneGeometry(0.14 * scale, 0.72 * scale, 5), trimMat);
     horn.position.set(s * 0.34 * scale, 3.2 * scale, 0.03);
     horn.rotation.z = s * 0.34;
     horn.castShadow = true;
@@ -2358,7 +2457,7 @@ function createEnemy(type) {
     group.add(arm);
     limbs.arms.push({ mesh: arm, side: s, baseY: arm.position.y, baseZ: arm.position.z, baseRotZ: arm.rotation.z });
 
-    const shoulder = new THREE.Mesh(new THREE.DodecahedronGeometry(0.28 * scale, 0), trimMat);
+    const shoulder = new THREE.Mesh(dodecahedronGeometry(0.28 * scale, 0), trimMat);
     shoulder.position.set(s * 0.76 * scale, 2.1 * scale, 0.02);
     shoulder.scale.set(1.25, 0.78, 0.95);
     shoulder.castShadow = true;
@@ -2371,14 +2470,14 @@ function createEnemy(type) {
     group.add(leg);
     limbs.legs.push({ mesh: leg, side: s, baseY: leg.position.y, baseZ: leg.position.z, baseRotZ: leg.rotation.z });
 
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(0.42 * scale, 0.18 * scale, 0.68 * scale), type === "crawler" ? materials.rune : trimMat);
+    const foot = new THREE.Mesh(boxGeometry(0.42 * scale, 0.18 * scale, 0.68 * scale), type === "crawler" ? materials.rune : trimMat);
     foot.position.set(s * 0.28 * scale, 0.12 * scale, 0.18 * scale);
     foot.castShadow = true;
     group.add(foot);
     limbs.feet.push({ mesh: foot, side: s, baseY: foot.position.y, baseZ: foot.position.z });
   }
 
-  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.16 * scale, 0.14 * scale, stats.weaponLength * scale), trimMat);
+  const blade = new THREE.Mesh(boxGeometry(0.16 * scale, 0.14 * scale, stats.weaponLength * scale), trimMat);
   blade.position.set(0.96 * scale, 1.2 * scale, -0.65 * scale);
   blade.rotation.x = -0.75;
   blade.castShadow = true;
@@ -2386,7 +2485,7 @@ function createEnemy(type) {
 
   const spineCount = type === "brute" ? 6 : type === "stalker" ? 8 : 3;
   for (let i = 0; i < spineCount; i += 1) {
-    const spine = new THREE.Mesh(new THREE.ConeGeometry(0.1 * scale, 0.58 * scale, 5), trimMat);
+    const spine = new THREE.Mesh(coneGeometry(0.1 * scale, 0.58 * scale, 5), trimMat);
     spine.position.set((i - (spineCount - 1) / 2) * 0.22 * scale, (2.22 - Math.abs(i - spineCount / 2) * 0.03) * scale, -0.44 * scale);
     spine.rotation.x = -0.55;
     spine.castShadow = true;
@@ -2394,7 +2493,7 @@ function createEnemy(type) {
   }
 
   if (type === "wraith" || type === "sentinel") {
-    const halo = new THREE.Mesh(new THREE.TorusGeometry(0.46 * scale, 0.035 * scale, 6, 18), materials.rune);
+    const halo = new THREE.Mesh(torusGeometry(0.46 * scale, 0.035 * scale, 6, 18), materials.rune);
     halo.position.set(0, 2.28 * scale, -0.48 * scale);
     halo.rotation.x = Math.PI / 2;
     group.add(halo);
@@ -2402,7 +2501,7 @@ function createEnemy(type) {
 
   if (type === "imp" || type === "stalker") {
     for (let s = -1; s <= 1; s += 2) {
-      const wing = new THREE.Mesh(new THREE.ConeGeometry(0.34 * scale, 1.1 * scale, 3), trimMat);
+      const wing = new THREE.Mesh(coneGeometry(0.34 * scale, 1.1 * scale, 3), trimMat);
       wing.position.set(s * 0.72 * scale, 1.74 * scale, -0.42 * scale);
       wing.rotation.z = s * 0.85;
       wing.rotation.x = -0.65;
@@ -2413,24 +2512,24 @@ function createEnemy(type) {
   }
 
   if (stats.boss) {
-    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.62 * scale, 0.055 * scale, 6, 24), trimMat);
+    const crown = new THREE.Mesh(torusGeometry(0.62 * scale, 0.055 * scale, 6, 24), trimMat);
     crown.position.set(0, 3.34 * scale, 0);
     crown.rotation.x = Math.PI / 2;
     crown.castShadow = true;
     group.add(crown);
 
-    const chestCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.24 * scale, 0), materials.rune);
+    const chestCore = new THREE.Mesh(octahedronGeometry(0.24 * scale, 0), materials.rune);
     chestCore.position.set(0, 2.08 * scale, 0.54 * scale);
     group.add(chestCore);
 
     for (let s = -1; s <= 1; s += 2) {
-      const pauldron = new THREE.Mesh(new THREE.DodecahedronGeometry(0.42 * scale, 0), trimMat);
+      const pauldron = new THREE.Mesh(dodecahedronGeometry(0.42 * scale, 0), trimMat);
       pauldron.position.set(s * 0.98 * scale * stats.width, 2.24 * scale, -0.02 * scale);
       pauldron.scale.set(1.35, 0.72, 1.08);
       pauldron.castShadow = true;
       group.add(pauldron);
 
-      const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.16 * scale, 0.9 * scale, 5), trimMat);
+      const tusk = new THREE.Mesh(coneGeometry(0.16 * scale, 0.9 * scale, 5), trimMat);
       tusk.position.set(s * 0.44 * scale, 2.72 * scale, 0.46 * scale);
       tusk.rotation.x = Math.PI / 2;
       tusk.rotation.z = -s * 0.42;
@@ -2440,7 +2539,7 @@ function createEnemy(type) {
 
     const ringCount = type === "voidseer" ? 3 : 2;
     for (let i = 0; i < ringCount; i += 1) {
-      const ring = new THREE.Mesh(new THREE.TorusGeometry((0.86 + i * 0.22) * scale, 0.025 * scale, 6, 28), materials.rune);
+      const ring = new THREE.Mesh(torusGeometry((0.86 + i * 0.22) * scale, 0.025 * scale, 6, 28), materials.rune);
       ring.position.set(0, (1.55 + i * 0.32) * scale, -0.52 * scale);
       ring.rotation.x = Math.PI / 2;
       ring.rotation.z = i * 0.7;
@@ -2449,7 +2548,7 @@ function createEnemy(type) {
     }
   }
 
-  const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.35 * scale, 24), materials.shadow);
+  const shadow = new THREE.Mesh(circleGeometry(1.35 * scale, 24), materials.shadow);
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.025;
   group.add(shadow);
@@ -2770,6 +2869,7 @@ function updatePlayer(delta) {
   const object = controls.getObject();
   const previousX = object.position.x;
   const previousZ = object.position.z;
+  const previousFeetY = object.position.y - PLAYER_HEIGHT;
   const previousFloorY = state.floorY;
   let airborneWorldY = object.position.y;
   if (!state.grounded) {
@@ -2793,12 +2893,13 @@ function updatePlayer(delta) {
   state.boostX = THREE.MathUtils.damp(state.boostX, 0, 2.8, delta);
   state.boostZ = THREE.MathUtils.damp(state.boostZ, 0, 2.8, delta);
 
-  let surface = getArenaSurface(object.position.x, object.position.z);
-  if (state.grounded && surface.kind === "platform" && surface.height - previousFloorY > 0.9) {
-    object.position.x = previousX;
-    object.position.z = previousZ;
-    surface = getArenaSurface(object.position.x, object.position.z);
-  }
+  const movedFeetY = state.grounded ? previousFloorY : airborneWorldY - PLAYER_HEIGHT;
+  resolveArenaSideCollisions(object.position, movedFeetY);
+
+  const reachableY = state.grounded
+    ? previousFloorY + PLAYER_STEP_HEIGHT
+    : Math.max(previousFeetY, airborneWorldY - PLAYER_HEIGHT) + SURFACE_SNAP_HEIGHT;
+  let surface = getArenaSurface(object.position.x, object.position.z, reachableY);
 
   if (state.grounded && previousFloorY - surface.height > 0.45) {
     state.grounded = false;
@@ -2830,7 +2931,12 @@ function updatePlayer(delta) {
     object.position.x = (object.position.x / dist) * (ARENA_RADIUS - PLAYER_RADIUS);
     object.position.z = (object.position.z / dist) * (ARENA_RADIUS - PLAYER_RADIUS);
   }
-  surface = getArenaSurface(object.position.x, object.position.z);
+  const finalFeetY = state.grounded ? previousFloorY : airborneWorldY - PLAYER_HEIGHT;
+  resolveArenaSideCollisions(object.position, finalFeetY);
+  const finalReachableY = state.grounded
+    ? previousFloorY + PLAYER_STEP_HEIGHT
+    : Math.max(previousFeetY, airborneWorldY - PLAYER_HEIGHT) + SURFACE_SNAP_HEIGHT;
+  surface = getArenaSurface(object.position.x, object.position.z, finalReachableY);
   if (!state.grounded) {
     state.jumpOffset = airborneWorldY - PLAYER_HEIGHT - surface.height;
   }
@@ -3415,7 +3521,7 @@ function clearRagdolls() {
 }
 
 function makeRagdollContactCorners(mesh) {
-  mesh.geometry.computeBoundingBox();
+  if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
   const bounds = mesh.geometry.boundingBox;
   if (!bounds) return [new THREE.Vector3(0, -0.2, 0)];
   const sx = Math.abs(mesh.scale.x);
