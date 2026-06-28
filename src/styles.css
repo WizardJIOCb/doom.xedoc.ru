@@ -98,8 +98,8 @@ button {
 }
 
 .profile-summary {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
   gap: 14px;
   align-items: center;
   color: #d9fff7;
@@ -118,15 +118,21 @@ button {
 }
 
 .profile-summary strong {
+  min-width: 0;
+  overflow: hidden;
   color: #fff3df;
   font-size: 0.78rem;
   line-height: 1.25;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .auth-controls {
   display: grid;
-  grid-template-columns: minmax(112px, 0.75fr) minmax(112px, 0.75fr) repeat(4, auto);
+  grid-template-columns: repeat(2, minmax(120px, 1fr)) repeat(4, minmax(94px, 0.72fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .auth-controls input {
@@ -142,8 +148,10 @@ button {
   font-weight: 800;
 }
 
-.auth-controls button {
-  min-width: 92px;
+.profile-panel .auth-controls button {
+  justify-self: stretch;
+  width: 100%;
+  min-width: 0;
   min-height: 38px;
   font-size: 0.74rem;
   box-shadow:
@@ -384,9 +392,13 @@ button {
   }
 
   .profile-summary {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: 1fr;
     gap: 3px;
+  }
+
+  .profile-summary strong {
+    text-align: left;
+    white-space: normal;
   }
 
   .profile-summary strong,
@@ -399,8 +411,17 @@ button {
   }
 
   .auth-controls {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 6px;
+  }
+
+  .auth-controls input {
+    grid-column: span 3;
+  }
+
+  .auth-controls button {
+    grid-column: span 2;
+    width: 100%;
   }
 
   .auth-controls button,
