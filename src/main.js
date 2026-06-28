@@ -69,6 +69,11 @@ const RAMP_THICKNESS = 0.46;
 const UNDER_PLATFORM_CLEARANCE = 0.22;
 const MAX_ENEMIES = 72;
 const ENEMY_POOL_WARMUP_DELAY = 0.16;
+const ENEMY_GROUND_OFFSET = 0.08;
+const ENEMY_GRAVITY = 22;
+const ENEMY_STEP_HEIGHT = 0.42;
+const ENEMY_DROP_HEIGHT = 0.48;
+const ENEMY_ROCKET_JUMP_COOLDOWN = 1.15;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
 const WAVE_BULK_GROWTH = 2;
@@ -2881,6 +2886,9 @@ function spawnEnemy(type, index = 0) {
   const enemy = acquireEnemy(type);
   enemy.netId = `${network.id ?? "local"}-${nextEnemyId++}`;
   enemy.group.position.set(x, floorY - 1.35, z);
+  enemy.floorY = floorY;
+  enemy.grounded = true;
+  enemy.verticalVelocity = 0;
   enemy.lastPosition.copy(enemy.group.position);
   enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
@@ -2919,6 +2927,10 @@ function resetEnemyForSpawn(enemy, type = enemy.type) {
   enemy.attackTimer = 0.9 + gameRandom() * 1.1;
   enemy.bob = gameRandom() * Math.PI * 2;
   enemy.moveSpeed = 0;
+  enemy.floorY = 0;
+  enemy.grounded = true;
+  enemy.verticalVelocity = 0;
+  enemy.rocketJumpCooldown = 0;
   enemy.dead = false;
   enemy.group.visible = true;
   enemy.group.position.set(0, 0, 0);
@@ -3315,6 +3327,10 @@ function createEnemy(type) {
     hitRadius: stats.hitRadius ?? (stats.boss ? 2.1 : 1.1),
     boltColor: stats.glow,
     spawnProgress: 0,
+    floorY: 0,
+    grounded: true,
+    verticalVelocity: 0,
+    rocketJumpCooldown: 0,
     attackTimer: 0.9 + gameRandom() * 1.1,
     bob: gameRandom() * Math.PI * 2,
     lastPosition: group.position.clone(),
@@ -3867,6 +3883,59 @@ function animateEnemyWalk(enemy, delta, moveSpeed, attacking) {
   }
 }
 
+function updateEnemyVerticalPhysics(enemy, delta) {
+  const pos = enemy.group.position;
+  enemy.rocketJumpCooldown = Math.max(0, (enemy.rocketJumpCooldown ?? 0) - delta);
+  const currentFloor = enemy.floorY ?? getArenaFloorHeight(pos.x, pos.z);
+  const currentFeetY = pos.y - ENEMY_GROUND_OFFSET;
+  const reachableSurface = getArenaSurface(
+    pos.x,
+    pos.z,
+    enemy.grounded ? currentFloor + ENEMY_STEP_HEIGHT : currentFeetY + SURFACE_SNAP_HEIGHT
+  );
+  const fullSurface = getArenaSurface(pos.x, pos.z);
+
+  if (enemy.grounded) {
+    const climbHeight = fullSurface.height - currentFloor;
+    if (climbHeight > ENEMY_STEP_HEIGHT) {
+      if (enemy.rocketJumpCooldown <= 0) {
+        enemy.grounded = false;
+        enemy.verticalVelocity = Math.min(15.5, Math.max(8.5, Math.sqrt(2 * ENEMY_GRAVITY * (climbHeight + 0.95))));
+        enemy.rocketJumpCooldown = ENEMY_ROCKET_JUMP_COOLDOWN;
+        spawnMuzzleSparks(pos.clone().setY(currentFloor + 0.45), worldUp, enemy.boss ? 30 : 18, enemy.boltColor ?? 0xff5a1d);
+      } else {
+        pos.y = currentFloor + ENEMY_GROUND_OFFSET;
+        enemy.floorY = currentFloor;
+        return;
+      }
+    } else if (currentFloor - reachableSurface.height > ENEMY_DROP_HEIGHT) {
+      enemy.grounded = false;
+      enemy.verticalVelocity = Math.min(enemy.verticalVelocity ?? 0, -0.8);
+    } else {
+      enemy.floorY = reachableSurface.height;
+      enemy.verticalVelocity = 0;
+      pos.y = THREE.MathUtils.damp(pos.y, enemy.floorY + ENEMY_GROUND_OFFSET, 18, delta);
+      return;
+    }
+  }
+
+  enemy.verticalVelocity -= ENEMY_GRAVITY * delta;
+  pos.y += enemy.verticalVelocity * delta;
+
+  const airborneFeetY = pos.y - ENEMY_GROUND_OFFSET;
+  const landingSurface = getArenaSurface(pos.x, pos.z, airborneFeetY + SURFACE_SNAP_HEIGHT);
+  const landingY = landingSurface.height + ENEMY_GROUND_OFFSET;
+  if (enemy.verticalVelocity <= 0 && pos.y <= landingY) {
+    if ((enemy.floorY ?? 0) - landingSurface.height > 1.8) {
+      state.shake = Math.max(state.shake, 0.025);
+    }
+    enemy.floorY = landingSurface.height;
+    enemy.grounded = true;
+    enemy.verticalVelocity = 0;
+    pos.y = landingY;
+  }
+}
+
 function updateEnemies(delta) {
   const canControlEnemies = isEnemyHost();
   const playerPos = controls.getObject().position;
@@ -3886,18 +3955,23 @@ function updateEnemies(delta) {
     const dirZ = toPlayer.z / distance;
 
     enemy.group.rotation.y = Math.atan2(dirX, dirZ);
-    const floorY = getArenaFloorHeight(pos.x, pos.z);
+    const floorY = enemy.floorY ?? getArenaFloorHeight(pos.x, pos.z);
     if (enemy.spawnProgress < 1) {
       enemy.spawnProgress = Math.min(1, enemy.spawnProgress + delta / ENEMY_EMERGE_TIME);
       const emerge = 1 - Math.pow(1 - enemy.spawnProgress, 3);
-      enemy.group.position.y = THREE.MathUtils.lerp(floorY - 1.35, floorY + 0.08, emerge);
+      enemy.group.position.y = THREE.MathUtils.lerp(floorY - 1.35, floorY + ENEMY_GROUND_OFFSET, emerge);
       enemy.group.scale.setScalar(THREE.MathUtils.lerp(0.62, 1, emerge));
+      if (enemy.spawnProgress >= 1) {
+        enemy.grounded = true;
+        enemy.verticalVelocity = 0;
+        enemy.floorY = floorY;
+        enemy.group.position.y = floorY + ENEMY_GROUND_OFFSET;
+      }
       animateEnemyWalk(enemy, delta, 0.25, false);
       enemy.lastPosition.copy(pos);
       continue;
     }
 
-    enemy.group.position.y = floorY + 0.08;
     enemy.group.scale.setScalar(1);
     let moveSpeed = 0;
 
@@ -3907,7 +3981,7 @@ function updateEnemies(delta) {
       pos.z += dirZ * stride;
       moveSpeed = stride / Math.max(delta, 0.001);
     }
-    enemy.group.position.y = getArenaFloorHeight(pos.x, pos.z) + 0.08;
+    updateEnemyVerticalPhysics(enemy, delta);
 
     enemy.attackTimer -= delta;
     if (distance <= enemy.attackRange && enemy.attackTimer <= 0 && state.alive) {
