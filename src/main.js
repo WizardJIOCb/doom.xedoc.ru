@@ -32,6 +32,7 @@ const registerButton = document.querySelector("#registerButton");
 const logoutButton = document.querySelector("#logoutButton");
 const leaderboardButton = document.querySelector("#leaderboardButton");
 const authStatus = document.querySelector("#authStatus");
+const authControls = document.querySelector("#authControls");
 const healthText = document.querySelector("#healthText");
 const armorText = document.querySelector("#armorText");
 const healthBar = document.querySelector("#healthBar");
@@ -1904,6 +1905,8 @@ function renderProfilePanel() {
   const label = authed ? authState.username : "Guest Slayer";
   accountLabel.textContent = authed ? `Account: ${label}` : "Guest Slayer";
   profileSummary.textContent = `Account Lv ${getAccountLevel()} / Essence ${profile.essence} / Cores ${profile.cores} / Kills ${profile.stats?.kills ?? 0} / Slayers ${getProfileUnlockedCount()}/${CHARACTERS.length}`;
+  authControls.classList.toggle("is-authed", authed);
+  authControls.classList.toggle("is-guest", !authed);
   logoutButton.classList.toggle("hidden", !authed);
   loginButton.classList.toggle("hidden", authed);
   registerButton.classList.toggle("hidden", authed);
