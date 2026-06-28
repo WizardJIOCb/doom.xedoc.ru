@@ -54,6 +54,15 @@ renderer.toneMappingExposure = 1.12;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x070504);
 scene.fog = new THREE.FogExp2(0x120806, 0.018);
+const enemyWarmupScene = new THREE.Scene();
+const enemyWarmupCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 30);
+enemyWarmupCamera.position.set(0, 2.4, 7);
+enemyWarmupCamera.lookAt(0, 1.7, 0);
+enemyWarmupScene.add(new THREE.HemisphereLight(0xffffff, 0x202020, 1.1));
+const enemyWarmupLight = new THREE.DirectionalLight(0xffffff, 1);
+enemyWarmupLight.position.set(3, 6, 4);
+enemyWarmupLight.castShadow = true;
+enemyWarmupScene.add(enemyWarmupLight);
 const worldRoot = new THREE.Group();
 worldRoot.name = "worldRoot";
 scene.add(worldRoot);
@@ -74,6 +83,9 @@ const ENEMY_GRAVITY = 22;
 const ENEMY_STEP_HEIGHT = 0.42;
 const ENEMY_DROP_HEIGHT = 0.48;
 const ENEMY_ROCKET_JUMP_COOLDOWN = 1.15;
+const ENEMY_SHADOW_LIMIT = 12;
+const ENEMY_SHADOW_UPDATE_INTERVAL = 0.22;
+const ENEMY_GPU_WARMUP_PER_FRAME = 3;
 const WAVE_BASE_ENEMIES = 10;
 const WAVE_LINEAR_GROWTH = 5;
 const WAVE_BULK_GROWTH = 2;
@@ -387,6 +399,7 @@ const enemies = [];
 const enemiesById = new Map();
 const enemyPools = new Map();
 const enemyPoolWarmupQueue = [];
+const enemyGpuWarmupQueue = [];
 const pickups = [];
 const sparks = [];
 const bloodDrops = [];
@@ -472,6 +485,7 @@ let selectedArena = ARENAS[0];
 let profile = loadProfile();
 let lastPointerUnlockAt = 0;
 let enemyPoolWarmupTimer = 0;
+let enemyShadowUpdateTimer = 0;
 
 const input = {
   x: 0,
@@ -524,6 +538,7 @@ window.ironCitadelDebug = {
   projectileHitVolumes,
   enemyPools,
   enemyPoolWarmupQueue,
+  enemyGpuWarmupQueue,
   camera,
   controls,
   isEnemyHost,
@@ -791,10 +806,15 @@ function addEnemyToPool(enemy) {
   const pool = getEnemyPool(enemy.type);
   const maxPoolSize = Math.max(getEnemyPoolTarget(enemy.type) + 8, 12);
   scene.remove(enemy.group);
+  enemyWarmupScene.remove(enemy.group);
   enemy.group.visible = false;
+  setEnemyShadowEnabled(enemy, false);
   enemy.dead = true;
   enemy.netId = "";
-  if (pool.length < maxPoolSize) pool.push(enemy);
+  if (pool.length < maxPoolSize) {
+    pool.push(enemy);
+    if (!enemy.gpuWarmed && !enemyGpuWarmupQueue.includes(enemy)) enemyGpuWarmupQueue.push(enemy);
+  }
 }
 
 function scheduleEnemyPoolWarmup() {
@@ -823,6 +843,26 @@ function processEnemyPoolWarmup(delta) {
     addEnemyToPool(createEnemy(type));
   }
   enemyPoolWarmupTimer = ENEMY_POOL_WARMUP_DELAY;
+}
+
+function processEnemyGpuWarmup() {
+  if (!enemyGpuWarmupQueue.length) return;
+  const count = state.started ? 1 : ENEMY_GPU_WARMUP_PER_FRAME;
+  for (let i = 0; i < count && enemyGpuWarmupQueue.length; i += 1) {
+    const enemy = enemyGpuWarmupQueue.shift();
+    if (!enemy || enemy.gpuWarmed || !enemy.dead) continue;
+    enemy.group.visible = true;
+    enemy.group.position.set((i - 1) * 2.4, 0, 0);
+    enemy.group.rotation.set(0, 0, 0);
+    enemy.group.scale.setScalar(1);
+    setEnemyShadowEnabled(enemy, true);
+    enemyWarmupScene.add(enemy.group);
+    renderer.render(enemyWarmupScene, enemyWarmupCamera);
+    enemyWarmupScene.remove(enemy.group);
+    setEnemyShadowEnabled(enemy, false);
+    enemy.group.visible = false;
+    enemy.gpuWarmed = true;
+  }
 }
 
 function getArenaTheme() {
@@ -2933,6 +2973,7 @@ function resetEnemyForSpawn(enemy, type = enemy.type) {
   enemy.rocketJumpCooldown = 0;
   enemy.dead = false;
   enemy.group.visible = true;
+  setEnemyShadowEnabled(enemy, false);
   enemy.group.position.set(0, 0, 0);
   enemy.group.rotation.set(0, 0, 0);
   enemy.group.scale.setScalar(1);
@@ -2983,6 +3024,34 @@ function resetEnemyPose(enemy) {
     const joint = wing.bone ?? wing.mesh;
     joint.rotation.x = wing.baseBoneRotX ?? wing.baseRotX ?? 0;
     joint.rotation.z = wing.baseBoneRotZ ?? wing.baseRotZ ?? 0;
+  }
+}
+
+function setEnemyShadowEnabled(enemy, enabled) {
+  if (!enemy || enemy.shadowEnabled === enabled) return;
+  enemy.shadowEnabled = enabled;
+  enemy.group.traverse((child) => {
+    if (child.isMesh && child.material !== materials.shadow && child.geometry?.type !== "CircleGeometry") {
+      child.castShadow = enabled;
+    }
+  });
+}
+
+function updateEnemyShadowCasters(delta) {
+  if (!enemies.length) return;
+  enemyShadowUpdateTimer -= delta;
+  if (enemyShadowUpdateTimer > 0) return;
+  enemyShadowUpdateTimer = ENEMY_SHADOW_UPDATE_INTERVAL;
+
+  const playerPos = controls.getObject().position;
+  const ranked = enemies.map((enemy) => ({
+    enemy,
+    score: enemy.boss ? -100000 : enemy.group.position.distanceToSquared(playerPos)
+  }));
+  ranked.sort((a, b) => a.score - b.score);
+  const shadowSet = new Set(ranked.slice(0, ENEMY_SHADOW_LIMIT).map((entry) => entry.enemy));
+  for (const enemy of enemies) {
+    setEnemyShadowEnabled(enemy, shadowSet.has(enemy));
   }
 }
 
@@ -3335,6 +3404,8 @@ function createEnemy(type) {
     bob: gameRandom() * Math.PI * 2,
     lastPosition: group.position.clone(),
     moveSpeed: 0,
+    gpuWarmed: false,
+    shadowEnabled: true,
     dead: false
   };
 }
@@ -3548,6 +3619,7 @@ function animate() {
   requestAnimationFrame(animate);
   const delta = Math.min(clock.getDelta(), 0.045);
   update(delta);
+  processEnemyGpuWarmup();
   renderer.render(scene, camera);
 }
 
@@ -3567,6 +3639,7 @@ function update(delta) {
     if (state.touchFireHeld || state.mouseFireHeld) fire();
   }
   updateEnemies(delta);
+  updateEnemyShadowCasters(delta);
   updateProjectiles(delta);
   updatePickups(delta);
   updateEffects(delta);
