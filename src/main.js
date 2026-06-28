@@ -2728,10 +2728,19 @@ function chooseAbility(key) {
 
   if (state.pendingLevelUps > 0) {
     window.setTimeout(openLevelUp, 80);
-  } else if (state.started && state.alive && !isTouchDevice()) {
-    startButton.textContent = "Return to Battle";
-    overlay.classList.remove("hidden");
+  } else {
+    resumeAfterAbilityChoice();
   }
+}
+
+function resumeAfterAbilityChoice() {
+  overlay.classList.add("hidden");
+  state.mouseFireHeld = false;
+  state.touchFireHeld = false;
+  if (!state.started || !state.alive || isTouchDevice()) return;
+  window.setTimeout(() => {
+    if (!state.levelUpOpen && state.started && state.alive) tryLockControls();
+  }, 320);
 }
 
 function chooseAbilityByIndex(index) {
