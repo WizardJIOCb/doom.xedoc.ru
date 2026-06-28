@@ -100,6 +100,69 @@ button {
   text-transform: uppercase;
 }
 
+.arena-panel {
+  width: min(900px, 94vw);
+  justify-self: center;
+  display: grid;
+  gap: 10px;
+}
+
+.arena-heading {
+  color: #d2a967;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.arena-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.arena-card {
+  min-width: 0;
+  min-height: 96px;
+  border: 1px solid rgba(205, 147, 74, 0.34);
+  border-radius: 6px;
+  padding: 10px;
+  color: #f7eee0;
+  background: linear-gradient(180deg, rgba(18, 10, 7, 0.78), rgba(8, 5, 4, 0.72));
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.28);
+  text-align: left;
+  cursor: pointer;
+}
+
+.arena-card strong,
+.arena-card span {
+  display: block;
+}
+
+.arena-card strong {
+  color: #fff3df;
+  font-size: 0.9rem;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.arena-card span {
+  margin-top: 6px;
+  color: #d4a567;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.arena-card.is-selected {
+  border-color: rgba(85, 230, 199, 0.82);
+  color: #d9fff7;
+  background: linear-gradient(180deg, rgba(16, 51, 47, 0.82), rgba(12, 9, 7, 0.78));
+  box-shadow:
+    inset 0 0 22px rgba(53, 246, 208, 0.12),
+    0 0 22px rgba(53, 246, 208, 0.18);
+}
+
 .lobby-panel {
   width: min(760px, 92vw);
   justify-self: center;
@@ -132,6 +195,10 @@ button {
 }
 
 @media (max-width: 720px) {
+  .arena-list {
+    grid-template-columns: 1fr;
+  }
+
   .lobby-row {
     grid-template-columns: 1fr 1fr;
   }

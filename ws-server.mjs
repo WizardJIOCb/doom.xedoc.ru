@@ -6,6 +6,7 @@ const clients = new Map();
 const rooms = new Map();
 let nextId = 1;
 let nextRoomId = 1;
+const ARENA_KEYS = new Set(["forge", "rift", "spire"]);
 
 function cleanName(value, fallback) {
   return String(value || fallback)
@@ -24,6 +25,7 @@ function roomSummary(room) {
   return {
     id: room.id,
     name: room.name,
+    arena: room.arena,
     players: room.players.size,
     hostId: room.hostId,
     seed: room.seed,
@@ -134,6 +136,7 @@ wss.on("connection", (socket) => {
         const room = {
           id: String(nextRoomId++),
           name,
+          arena: ARENA_KEYS.has(message.arena) ? message.arena : "forge",
           hostId: id,
           seed: Math.floor(Math.random() * 2147483647),
           players: new Set(),

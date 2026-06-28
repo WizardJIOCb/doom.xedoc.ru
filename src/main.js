@@ -5,6 +5,7 @@ import "./styles.css";
 const canvas = document.querySelector("#game");
 const overlay = document.querySelector("#overlay");
 const startButton = document.querySelector("#startButton");
+const arenaList = document.querySelector("#arenaList");
 const playerNameInput = document.querySelector("#playerNameInput");
 const roomNameInput = document.querySelector("#roomNameInput");
 const createRoomButton = document.querySelector("#createRoomButton");
@@ -48,12 +49,18 @@ renderer.toneMappingExposure = 1.12;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x070504);
 scene.fog = new THREE.FogExp2(0x120806, 0.018);
+const worldRoot = new THREE.Group();
+worldRoot.name = "worldRoot";
+scene.add(worldRoot);
 
 const ARENA_RADIUS = 42;
 const ENEMY_HIT_RADIUS = 1.15;
 const PLAYER_RADIUS = 1.05;
 const PLAYER_HEIGHT = 2.2;
-const MAX_ENEMIES = 20;
+const MAX_ENEMIES = 72;
+const WAVE_BASE_ENEMIES = 10;
+const WAVE_LINEAR_GROWTH = 5;
+const WAVE_BULK_GROWTH = 2;
 const roman = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
 const AMMO_MAX = 999;
 const WEAPONS = [
@@ -65,7 +72,75 @@ const WEAPONS = [
   { name: "Slicer", cost: 3, cooldown: 0.48, damage: 46, speed: 54, ttl: 1.1, shots: 1, spread: 0.006, pierce: 2, color: 0x5fffe0, size: 1.35, disc: true },
   { name: "Nailgun", cost: 2, cooldown: 0.2, damage: 34, speed: 76, ttl: 1.2, shots: 3, spread: 0.032, color: 0xb48cff, size: 0.82 }
 ];
-const ENEMY_TYPES = ["raider", "brute", "wraith", "imp", "stalker", "sentinel", "crawler"];
+const BOSS_TYPES = ["dreadlord", "goremaw", "voidseer", "ironwarden"];
+const ENEMY_TYPES = ["raider", "brute", "wraith", "imp", "stalker", "sentinel", "crawler", ...BOSS_TYPES];
+const BOSS_KILL_INTERVAL = 24;
+const ARENAS = [
+  {
+    key: "forge",
+    name: "Iron Forge",
+    blurb: "Classic ring, central forge, fast reads.",
+    spawn: { x: 0, z: 18 },
+    jumpPads: [
+      { x: 0, z: 30, yaw: Math.PI },
+      { x: 26, z: 14, yaw: -2.35 },
+      { x: -26, z: 14, yaw: 2.35 },
+      { x: 24, z: -20, yaw: -0.75 },
+      { x: -24, z: -20, yaw: 0.75 }
+    ],
+    platforms: [],
+    ramps: []
+  },
+  {
+    key: "rift",
+    name: "Rift Crucible",
+    blurb: "Two raised lanes, side ramps, nasty crossfire.",
+    spawn: { x: 0, z: 21 },
+    jumpPads: [
+      { x: 0, z: 28, yaw: Math.PI, power: 18, lift: 15.5 },
+      { x: 22, z: -17, yaw: -0.8, power: 15, lift: 13.6 },
+      { x: -22, z: -17, yaw: 0.8, power: 15, lift: 13.6 },
+      { x: 0, z: -30, yaw: 0, power: 19, lift: 14.8 }
+    ],
+    platforms: [
+      { x: -18, z: -2, width: 13, depth: 25, height: 3.25, yaw: 0.16 },
+      { x: 18, z: -2, width: 13, depth: 25, height: 3.25, yaw: -0.16 },
+      { x: 0, z: -23, width: 18, depth: 9, height: 5.7, yaw: 0 }
+    ],
+    ramps: [
+      { x: -9, z: 12, width: 7.5, length: 20, from: 0, to: 3.25, yaw: -0.34 },
+      { x: 9, z: 12, width: 7.5, length: 20, from: 0, to: 3.25, yaw: 0.34 },
+      { x: -9, z: -17, width: 7, length: 15, from: 3.25, to: 5.7, yaw: 1.1 },
+      { x: 9, z: -17, width: 7, length: 15, from: 3.25, to: 5.7, yaw: -1.1 }
+    ]
+  },
+  {
+    key: "spire",
+    name: "Spire Gauntlet",
+    blurb: "High islands, long jumps, violent recoveries.",
+    spawn: { x: 0, z: 24 },
+    jumpPads: [
+      { x: 0, z: 25, yaw: Math.PI, power: 21, lift: 17 },
+      { x: 24, z: 0, yaw: -Math.PI / 2, power: 19, lift: 16.4 },
+      { x: -24, z: 0, yaw: Math.PI / 2, power: 19, lift: 16.4 },
+      { x: 0, z: -27, yaw: 0, power: 22, lift: 17.2 },
+      { x: 16, z: 19, yaw: -2.2, power: 16, lift: 14.6 },
+      { x: -16, z: 19, yaw: 2.2, power: 16, lift: 14.6 }
+    ],
+    platforms: [
+      { x: 0, z: -5, width: 16, depth: 16, height: 4.4, yaw: Math.PI / 4 },
+      { x: 24, z: 0, width: 11, depth: 15, height: 6.1, yaw: -0.25 },
+      { x: -24, z: 0, width: 11, depth: 15, height: 6.1, yaw: 0.25 },
+      { x: 0, z: -27, width: 18, depth: 8, height: 7.8, yaw: 0 }
+    ],
+    ramps: [
+      { x: 0, z: 9, width: 7.5, length: 20, from: 0, to: 4.4, yaw: 0 },
+      { x: 12, z: -15, width: 6.5, length: 19, from: 4.4, to: 7.8, yaw: -0.7 },
+      { x: -12, z: -15, width: 6.5, length: 19, from: 4.4, to: 7.8, yaw: 0.7 }
+    ]
+  }
+];
+const ARENA_BY_KEY = new Map(ARENAS.map((arena) => [arena.key, arena]));
 
 const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 240);
 camera.position.set(0, PLAYER_HEIGHT, 0);
@@ -82,6 +157,12 @@ const flatForward = new THREE.Vector3();
 const tmpVec = new THREE.Vector3();
 const targetTmp = new THREE.Vector3();
 const aimPoint = new THREE.Vector3();
+const muzzlePoint = new THREE.Vector3();
+const muzzleLocalTmp = new THREE.Vector3();
+const projectilePrevPos = new THREE.Vector3();
+const projectileImpactPos = new THREE.Vector3();
+const projectileImpactNormal = new THREE.Vector3();
+const decalNormalTmp = new THREE.Vector3();
 const worldUp = new THREE.Vector3(0, 1, 0);
 const ragdollCornerTmp = new THREE.Vector3();
 const WEAPON_BASE_POSITION = new THREE.Vector3(0.12, -0.34, -0.56);
@@ -99,6 +180,7 @@ const decals = [];
 const ragdolls = [];
 const hazards = [];
 const jumpPads = [];
+const projectileHitVolumes = [];
 const remoteProjectiles = [];
 
 let weaponRig;
@@ -115,7 +197,10 @@ const state = {
   ownedWeapons: WEAPONS.map(() => true),
   weaponIndex: 0,
   kills: 0,
+  nextBossKill: BOSS_KILL_INTERVAL,
+  bossIndex: 0,
   wave: 1,
+  arenaKey: ARENAS[0].key,
   nextWaveAt: 0,
   fireCooldown: 0,
   shieldCooldown: 0,
@@ -125,6 +210,7 @@ const state = {
   shake: 0,
   verticalVelocity: 0,
   jumpOffset: 0,
+  floorY: 0,
   grounded: true,
   boostX: 0,
   boostZ: 0,
@@ -135,6 +221,7 @@ const state = {
   consoleOpen: false,
   spawnTimer: 0,
   touchLookActive: false,
+  mouseFireHeld: false,
   touchFireHeld: false,
   touchShieldHeld: false
 };
@@ -157,11 +244,12 @@ const network = {
 
 let gameSeed = 1;
 let nextEnemyId = 1;
+let selectedArena = ARENAS[0];
 
 const input = {
   x: 0,
   z: 0,
-  sprint: false,
+  walk: false,
   lookPointer: null,
   stickPointer: null,
   stickX: 0,
@@ -181,7 +269,7 @@ const MAX_SPARK_POOL = 220;
 const MAX_BLOOD_POOL = 180;
 const MAX_BLOOD_DROPS = 160;
 const MAX_RAGDOLL_PARTS = 120;
-const SPAWN_DRIP_DELAY = 0.14;
+const SPAWN_DRIP_DELAY = 0.08;
 const ENEMY_EMERGE_TIME = 0.65;
 
 let spawnDripTimer = 0;
@@ -195,14 +283,37 @@ animate();
 window.ironCitadelDebug = {
   state,
   network,
+  arenas: ARENAS,
   weapons: WEAPONS,
   enemies,
+  projectiles,
+  enemyBolts,
+  sparks,
   bloodDrops,
+  decals,
   ragdolls,
+  projectileHitVolumes,
   camera,
   controls,
-  isEnemyHost
+  isEnemyHost,
+  getWaveEnemyCount,
+  getActiveEnemyTarget
 };
+
+function addWorldObject(object) {
+  worldRoot.add(object);
+  return object;
+}
+
+function clearWorld() {
+  while (worldRoot.children.length) {
+    worldRoot.remove(worldRoot.children[0]);
+  }
+  hazards.length = 0;
+  jumpPads.length = 0;
+  projectileHitVolumes.length = 0;
+  embers.length = 0;
+}
 
 function initAssets() {
   const stoneTexture = makeNoiseTexture("#392821", "#0b0807", 512, 2100, 0.42, "stone");
@@ -380,8 +491,9 @@ function initAssets() {
 }
 
 function buildWorld() {
+  clearWorld();
   addSkybox();
-  scene.add(new THREE.HemisphereLight(0x8a5c4b, 0x160807, 1.25));
+  addWorldObject(new THREE.HemisphereLight(0x8a5c4b, 0x160807, 1.25));
 
   const sun = new THREE.DirectionalLight(0xffc987, 1.15);
   sun.position.set(-16, 28, 12);
@@ -393,13 +505,13 @@ function buildWorld() {
   sun.shadow.camera.bottom = -58;
   sun.shadow.camera.near = 5;
   sun.shadow.camera.far = 90;
-  scene.add(sun);
+  addWorldObject(sun);
 
   const floor = new THREE.Mesh(geometries.floor, materials.floor);
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.02;
   floor.receiveShadow = true;
-  scene.add(floor);
+  addWorldObject(floor);
   addArenaFloorMarks();
   addArenaGrid();
 
@@ -409,14 +521,15 @@ function buildWorld() {
   );
   lavaRing.rotation.x = -Math.PI / 2;
   lavaRing.position.y = -0.05;
-  scene.add(lavaRing);
+  addWorldObject(lavaRing);
 
+  addArenaFeatures();
   addArenaWalls();
   addCentralForge();
   addTorches();
   addJumpPads();
   addSkyChains();
-  createWeaponRig();
+  if (!weaponRig) createWeaponRig();
   createEmbers();
 }
 
@@ -424,7 +537,7 @@ function addSkybox() {
   const sky = new THREE.Mesh(geometries.sky, materials.sky);
   sky.name = "skybox";
   sky.renderOrder = -1000;
-  scene.add(sky);
+  addWorldObject(sky);
 }
 
 function addArenaFloorMarks() {
@@ -438,7 +551,7 @@ function addArenaFloorMarks() {
       new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(points, 3)),
       radius === 16 || radius === 32 ? materials.floorRuneStroke : materials.floorStroke
     );
-    scene.add(ring);
+    addWorldObject(ring);
   }
 
   const spokePoints = [];
@@ -452,7 +565,7 @@ function addArenaFloorMarks() {
     new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(spokePoints, 3)),
     materials.floorStroke
   );
-  scene.add(spokes);
+  addWorldObject(spokes);
 }
 
 function addArenaGrid() {
@@ -462,21 +575,133 @@ function addArenaGrid() {
   grid.material.opacity = 0.32;
   grid.material.depthWrite = false;
   grid.renderOrder = 2;
-  scene.add(grid);
+  addWorldObject(grid);
+}
+
+function addArenaFeatures() {
+  for (const platform of selectedArena.platforms ?? []) {
+    addArenaPlatform(platform);
+  }
+  for (const ramp of selectedArena.ramps ?? []) {
+    addArenaRamp(ramp);
+  }
+}
+
+function addArenaPlatform(platform) {
+  const thickness = 0.72;
+  const group = new THREE.Group();
+  group.position.set(platform.x, platform.height - thickness / 2, platform.z);
+  group.rotation.y = platform.yaw ?? 0;
+
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(platform.width, thickness, platform.depth), materials.wall);
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  group.add(slab);
+
+  const top = new THREE.Mesh(new THREE.PlaneGeometry(platform.width * 0.86, platform.depth * 0.86), materials.floorRuneLine);
+  top.rotation.x = -Math.PI / 2;
+  top.position.y = thickness / 2 + 0.018;
+  top.renderOrder = 3;
+  group.add(top);
+
+  const railCount = Math.max(2, Math.floor(platform.depth / 7));
+  for (let i = 0; i < railCount; i += 1) {
+    const z = -platform.depth * 0.38 + i * ((platform.depth * 0.76) / Math.max(1, railCount - 1));
+    for (const side of [-1, 1]) {
+      const pylon = new THREE.Mesh(new THREE.BoxGeometry(0.28, 1.45, 0.28), materials.metal);
+      pylon.position.set(side * platform.width * 0.48, thickness / 2 + 0.7, z);
+      pylon.castShadow = true;
+      group.add(pylon);
+    }
+  }
+
+  addWorldObject(group);
+}
+
+function addArenaRamp(ramp) {
+  const rise = ramp.to - ramp.from;
+  const angle = Math.atan2(rise, ramp.length);
+  const thickness = 0.46;
+  const group = new THREE.Group();
+  group.position.set(ramp.x, (ramp.from + ramp.to) / 2 - thickness * 0.25, ramp.z);
+  group.rotation.y = ramp.yaw ?? 0;
+  group.rotation.x = -angle;
+
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(ramp.width, thickness, ramp.length), materials.metal);
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  group.add(slab);
+
+  const lane = new THREE.Mesh(new THREE.PlaneGeometry(ramp.width * 0.68, ramp.length * 0.88), materials.floorLine);
+  lane.rotation.x = -Math.PI / 2;
+  lane.position.y = thickness / 2 + 0.018;
+  lane.renderOrder = 4;
+  group.add(lane);
+
+  addWorldObject(group);
+}
+
+function toArenaLocal(feature, x, z) {
+  const yaw = -(feature.yaw ?? 0);
+  const dx = x - feature.x;
+  const dz = z - feature.z;
+  const sin = Math.sin(yaw);
+  const cos = Math.cos(yaw);
+  return {
+    x: dx * cos - dz * sin,
+    z: dx * sin + dz * cos
+  };
+}
+
+function pointInRectFeature(feature, x, z, padding = 0) {
+  const local = toArenaLocal(feature, x, z);
+  return Math.abs(local.x) <= feature.width / 2 + padding && Math.abs(local.z) <= feature.depth / 2 + padding;
+}
+
+function getRampHeightAt(ramp, x, z, padding = 0) {
+  const local = toArenaLocal(ramp, x, z);
+  if (Math.abs(local.x) > ramp.width / 2 + padding || Math.abs(local.z) > ramp.length / 2 + padding) return null;
+  const t = THREE.MathUtils.clamp((local.z + ramp.length / 2) / ramp.length, 0, 1);
+  return THREE.MathUtils.lerp(ramp.from, ramp.to, t);
+}
+
+function getArenaSurface(x, z) {
+  let height = 0;
+  let kind = "floor";
+
+  for (const ramp of selectedArena.ramps ?? []) {
+    const rampHeight = getRampHeightAt(ramp, x, z, PLAYER_RADIUS * 0.25);
+    if (rampHeight !== null && rampHeight >= height) {
+      height = rampHeight;
+      kind = "ramp";
+    }
+  }
+
+  for (const platform of selectedArena.platforms ?? []) {
+    if (pointInRectFeature(platform, x, z, PLAYER_RADIUS * 0.2) && platform.height >= height) {
+      height = platform.height;
+      kind = "platform";
+    }
+  }
+
+  return { height, kind };
+}
+
+function getArenaFloorHeight(x, z) {
+  return getArenaSurface(x, z).height;
+}
+
+function getArenaName(key) {
+  return ARENA_BY_KEY.get(key)?.name ?? ARENAS[0].name;
 }
 
 function addJumpPads() {
-  const positions = [
-    { x: 0, z: 30, yaw: Math.PI },
-    { x: 26, z: 14, yaw: -2.35 },
-    { x: -26, z: 14, yaw: 2.35 },
-    { x: 24, z: -20, yaw: -0.75 },
-    { x: -24, z: -20, yaw: 0.75 }
-  ];
+  const positions = selectedArena.jumpPads ?? [];
 
   for (const pad of positions) {
+    const floorY = getArenaFloorHeight(pad.x, pad.z);
     const group = new THREE.Group();
-    group.position.set(pad.x, 0.18, pad.z);
+    group.position.set(pad.x, floorY + 0.18, pad.z);
     group.rotation.y = pad.yaw;
 
     const base = new THREE.Mesh(geometries.jumpPad, materials.jumpPad);
@@ -498,14 +723,25 @@ function addJumpPads() {
     light.position.y = 1.2;
     group.add(light);
 
-    scene.add(group);
+    addWorldObject(group);
     jumpPads.push({
       group,
       x: pad.x,
+      y: floorY,
       z: pad.z,
       yaw: pad.yaw,
+      power: pad.power ?? 17,
+      lift: pad.lift ?? 13.8,
       radius: 2.4,
       cooldown: 0
+    });
+    projectileHitVolumes.push({
+      kind: "jumpPad",
+      x: pad.x,
+      z: pad.z,
+      radius: 2.15,
+      minY: floorY,
+      maxY: floorY + 0.72
     });
   }
 }
@@ -523,7 +759,7 @@ function addArenaWalls() {
     wall.rotation.y = angle;
     wall.castShadow = true;
     wall.receiveShadow = true;
-    scene.add(wall);
+    addWorldObject(wall);
 
     if (i % 3 === 0) {
       const tower = new THREE.Mesh(geometries.tower, materials.wall);
@@ -531,7 +767,7 @@ function addArenaWalls() {
       tower.rotation.y = angle * 0.5;
       tower.castShadow = true;
       tower.receiveShadow = true;
-      scene.add(tower);
+      addWorldObject(tower);
     }
 
     if (i % 2 === 0) {
@@ -545,7 +781,7 @@ function addArenaWalls() {
         spike.rotation.z = Math.PI;
         spike.rotation.y = angle;
         spike.castShadow = true;
-        scene.add(spike);
+        addWorldObject(spike);
       }
     }
   }
@@ -572,7 +808,15 @@ function addCentralForge() {
   core.position.y = 2.6;
   core.name = "forgeCore";
   altar.add(core);
-  scene.add(altar);
+  addWorldObject(altar);
+  projectileHitVolumes.push({
+    kind: "forge",
+    x: 0,
+    z: 0,
+    radius: 5.15,
+    minY: 0,
+    maxY: 3.75
+  });
 }
 
 function addTorches() {
@@ -584,18 +828,26 @@ function addTorches() {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.26, 3.4, 6), materials.metal);
     mast.position.set(x, 1.7, z);
     mast.castShadow = true;
-    scene.add(mast);
+    addWorldObject(mast);
 
     const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.34, 0.38, 8), materials.gold);
     bowl.position.set(x, 3.48, z);
     bowl.castShadow = true;
-    scene.add(bowl);
+    addWorldObject(bowl);
 
     const light = new THREE.PointLight(0xff5a1d, 2.7, 16, 2);
     light.position.set(x, 3.75, z);
-    scene.add(light);
+    addWorldObject(light);
 
     hazards.push({ angle, light, pulse: Math.random() * Math.PI * 2 });
+    projectileHitVolumes.push({
+      kind: "torch",
+      x,
+      z,
+      radius: 0.56,
+      minY: 0,
+      maxY: 3.95
+    });
   }
 }
 
@@ -613,7 +865,7 @@ function addSkyChains() {
       link.castShadow = true;
       chain.add(link);
     }
-    scene.add(chain);
+    addWorldObject(chain);
   }
 }
 
@@ -647,6 +899,7 @@ function createWeaponRig() {
   muzzleLight = new THREE.PointLight(0x57ffd7, 0, 8, 2);
   muzzleLight.position.set(0.42, -0.28, -1.48);
   weaponRig.add(muzzleLight);
+  syncMuzzleLightToWeapon();
 }
 
 function weaponMaterial(weapon) {
@@ -723,7 +976,41 @@ function createWeaponModel(index, weapon) {
     addBox([0.66, 0.07, 0.24], [0.46, -0.31, -0.86], glowMat);
   }
 
+  group.userData.muzzleLocals = getWeaponMuzzleLocals(index);
   return group;
+}
+
+function getWeaponMuzzleLocals(index) {
+  const offsets = [
+    [[0.42, -0.52, -1.86]],
+    [[0.42, -0.5, -1.68], [0.27, -0.5, -1.68], [0.57, -0.5, -1.68]],
+    [[0.48, -0.5, -2.05]],
+    [[0.42, -0.48, -2.48]],
+    [[0.4, -0.52, -1.62]],
+    [[0.34, -0.5, -1.34]],
+    [[0.45, -0.5, -1.84], [0.32, -0.5, -1.84], [0.58, -0.5, -1.84]]
+  ];
+  return (offsets[index] ?? offsets[0]).map(([x, y, z]) => new THREE.Vector3(x, y, z));
+}
+
+function getWeaponMuzzleWorldPosition(shotIndex = 0) {
+  const model = weaponModels[state.weaponIndex];
+  const muzzleLocals = model?.userData?.muzzleLocals;
+  if (!model || !muzzleLocals?.length) {
+    camera.getWorldDirection(forward);
+    camera.getWorldPosition(muzzlePoint).addScaledVector(forward, 1.2);
+    return muzzlePoint;
+  }
+  model.updateWorldMatrix(true, false);
+  muzzleLocalTmp.copy(muzzleLocals[shotIndex % muzzleLocals.length]);
+  return model.localToWorld(muzzlePoint.copy(muzzleLocalTmp));
+}
+
+function syncMuzzleLightToWeapon() {
+  if (!muzzleLight || !weaponRig) return;
+  getWeaponMuzzleWorldPosition(0);
+  weaponRig.worldToLocal(muzzleLocalTmp.copy(muzzlePoint));
+  muzzleLight.position.copy(muzzleLocalTmp);
 }
 
 function createEmbers() {
@@ -752,10 +1039,11 @@ function createEmbers() {
   });
   const emberCloud = new THREE.Points(emberGeometry, emberMaterial);
   emberCloud.name = "emberCloud";
-  scene.add(emberCloud);
+  addWorldObject(emberCloud);
 }
 
 function bindEvents() {
+  renderArenaSelector();
   startButton.addEventListener("click", () => {
     if (!state.alive) {
       restart();
@@ -817,12 +1105,27 @@ function bindEvents() {
 
   document.addEventListener("mousedown", (event) => {
     if (!state.started || !state.alive) return;
+    if (event.button === 0) state.mouseFireHeld = true;
     if (!controls.isLocked && !isTouchDevice()) {
       controls.lock();
       return;
     }
     if (event.button === 0) fire();
     if (event.button === 2) throwShield();
+  });
+  document.addEventListener("mouseup", (event) => {
+    if (event.button === 0) state.mouseFireHeld = false;
+  });
+  document.addEventListener("wheel", (event) => {
+    if (!state.started || !state.alive || state.consoleOpen || isTextEntryActive(event.target)) return;
+    event.preventDefault();
+    cycleWeapon(event.deltaY > 0 ? 1 : -1);
+  }, { passive: false });
+  window.addEventListener("blur", () => {
+    state.mouseFireHeld = false;
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) state.mouseFireHeld = false;
   });
 
   document.addEventListener("contextmenu", (event) => event.preventDefault());
@@ -832,6 +1135,7 @@ function bindEvents() {
   });
 
   controls.addEventListener("unlock", () => {
+    state.mouseFireHeld = false;
     if (state.alive && state.started && !isTouchDevice() && !state.consoleOpen) {
       overlay.classList.remove("hidden");
       startButton.textContent = "Return to Battle";
@@ -908,6 +1212,48 @@ function isLobbyHidden() {
   return overlay.classList.contains("hidden");
 }
 
+function renderArenaSelector() {
+  arenaList.textContent = "";
+  for (const arena of ARENAS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `arena-card${arena.key === state.arenaKey ? " is-selected" : ""}`;
+    button.disabled = Boolean(network.roomId) && arena.key !== state.arenaKey;
+    button.dataset.arena = arena.key;
+
+    const title = document.createElement("strong");
+    title.textContent = arena.name;
+    const blurb = document.createElement("span");
+    blurb.textContent = arena.blurb;
+    button.append(title, blurb);
+
+    button.addEventListener("click", () => selectArena(arena.key));
+    arenaList.appendChild(button);
+  }
+}
+
+function selectArena(key, options = {}) {
+  const arena = ARENA_BY_KEY.get(key) ?? ARENAS[0];
+  if (!options.force && network.roomId) return;
+  if (!options.force && state.started && state.alive) return;
+  if (arena.key === state.arenaKey && !options.rebuild) return;
+
+  selectedArena = arena;
+  state.arenaKey = arena.key;
+  buildWorld();
+  placePlayerAtArenaSpawn();
+  renderArenaSelector();
+}
+
+function placePlayerAtArenaSpawn() {
+  const spawn = selectedArena.spawn ?? { x: 0, z: 18 };
+  state.floorY = getArenaFloorHeight(spawn.x, spawn.z);
+  state.jumpOffset = 0;
+  state.verticalVelocity = 0;
+  state.grounded = true;
+  controls.getObject().position.set(spawn.x, PLAYER_HEIGHT + state.floorY, spawn.z);
+}
+
 function releaseMenuFocus() {
   const active = document.activeElement;
   if (active instanceof HTMLElement && overlay.contains(active)) {
@@ -982,11 +1328,13 @@ function handleNetworkMessage(message) {
     network.playerName = message.playerName ?? getPlayerName();
     playerNameInput.value = network.playerName;
     network.seed = message.room?.seed ?? 1;
+    selectArena(message.room?.arena ?? ARENAS[0].key, { force: true });
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
     resetRoomGame(network.seed);
     network.statusEl.textContent = network.roomName ? `ROOM ${network.roomName}` : `NET #${network.id}`;
     updateRoomStatus();
+    renderArenaSelector();
     requestRoomList();
     startGame();
     return;
@@ -998,6 +1346,7 @@ function handleNetworkMessage(message) {
     for (const peer of network.peers.values()) scene.remove(peer.group);
     network.peers.clear();
     updateRoomStatus();
+    renderArenaSelector();
     requestRoomList();
     return;
   }
@@ -1081,7 +1430,8 @@ function createNetworkRoom() {
   sendNetworkMessage({
     type: "create-room",
     name: roomNameInput.value || "Iron Arena",
-    playerName: getPlayerName()
+    playerName: getPlayerName(),
+    arena: state.arenaKey
   });
 }
 
@@ -1100,10 +1450,10 @@ function updateRoomStatus() {
     return;
   }
   if (network.roomId) {
-    roomStatus.textContent = `Connected to "${network.roomName}" as ${network.playerName}. Battle is live in this room.`;
+    roomStatus.textContent = `Connected to "${network.roomName}" on ${getArenaName(state.arenaKey)} as ${network.playerName}.`;
     return;
   }
-  roomStatus.textContent = `Connected as ${getPlayerName()}. Create or join a room, or press Enter the Citadel for solo.`;
+  roomStatus.textContent = `Connected as ${getPlayerName()}. Choose an arena, create or join a room, or play solo.`;
 }
 
 function renderRoomList() {
@@ -1131,6 +1481,7 @@ function renderRoomList() {
     title.textContent = room.name;
     const meta = document.createElement("span");
     meta.textContent = `${room.players} player${room.players === 1 ? "" : "s"} • room #${room.id}`;
+    meta.textContent = `${getArenaName(room.arena)} / ${room.players} player${room.players === 1 ? "" : "s"} / room #${room.id}`;
     info.append(title, meta);
 
     const stateLabel = document.createElement("span");
@@ -1185,14 +1536,19 @@ function resetRoomGame(seed) {
   state.ammo = AMMO_MAX;
   state.wave = 1;
   state.kills = 0;
+  state.nextBossKill = BOSS_KILL_INTERVAL;
+  state.bossIndex = 0;
   state.nextWaveAt = 0;
   state.fireCooldown = 0;
   state.shieldCooldown = 0;
   state.verticalVelocity = 0;
   state.jumpOffset = 0;
+  state.floorY = 0;
   state.grounded = true;
+  state.boostX = 0;
+  state.boostZ = 0;
   nextEnemyId = 1;
-  controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
+  placePlayerAtArenaSpawn();
   spawnQueue.length = 0;
   spawnDripTimer = 0;
   enemiesById.clear();
@@ -1324,6 +1680,8 @@ function applyEnemyState(message) {
   if (isEnemyHost()) return;
   state.wave = message.wave ?? state.wave;
   state.kills = message.kills ?? state.kills;
+  state.nextBossKill = message.nextBossKill ?? state.nextBossKill;
+  state.bossIndex = message.bossIndex ?? state.bossIndex;
 
   const seen = new Set();
   for (const snapshot of message.enemies ?? []) {
@@ -1364,6 +1722,8 @@ function sendEnemyState() {
     type: "enemy-state",
     wave: state.wave,
     kills: state.kills,
+    nextBossKill: state.nextBossKill,
+    bossIndex: state.bossIndex,
     enemies: enemies.map((enemy) => ({
       id: enemy.netId,
       type: enemy.type,
@@ -1398,9 +1758,18 @@ function updateNetwork(delta) {
 
   for (let i = remoteProjectiles.length - 1; i >= 0; i -= 1) {
     const shot = remoteProjectiles[i];
+    projectilePrevPos.copy(shot.mesh.position);
     shot.ttl -= delta;
     shot.mesh.position.addScaledVector(shot.velocity, delta);
     shot.mesh.rotation.y += delta * 12;
+    const impactKind = getProjectileWorldImpact(shot, projectilePrevPos, shot.mesh.position);
+    if (impactKind) {
+      shot.mesh.position.copy(projectileImpactPos);
+      spawnProjectileBreakEffect(shot, projectileImpactPos, projectileImpactNormal, impactKind);
+      scene.remove(shot.mesh);
+      remoteProjectiles.splice(i, 1);
+      continue;
+    }
     if (shot.ttl <= 0) {
       scene.remove(shot.mesh);
       remoteProjectiles.splice(i, 1);
@@ -1438,10 +1807,18 @@ function spawnRemoteShot(message) {
     ? new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 6), mat)
     : new THREE.Mesh(geometries.projectile, mat);
   const dir = new THREE.Vector3(message.dx ?? 0, message.dy ?? 0, message.dz ?? -1).normalize();
-  mesh.position.set(message.x ?? 0, message.y ?? PLAYER_HEIGHT, message.z ?? 0).addScaledVector(dir, 1.2);
+  mesh.position.set(message.x ?? 0, message.y ?? PLAYER_HEIGHT, message.z ?? 0);
+  if (!message.muzzleOrigin) mesh.position.addScaledVector(dir, 1.2);
   mesh.scale.setScalar(weapon.size);
   scene.add(mesh);
-  remoteProjectiles.push({ mesh, velocity: dir.multiplyScalar(weapon.speed), ttl: Math.min(weapon.ttl, 1.2) });
+  remoteProjectiles.push({
+    mesh,
+    velocity: dir.multiplyScalar(weapon.speed),
+    ttl: Math.min(weapon.ttl, 1.2),
+    weaponIndex: message.weaponIndex ?? 0,
+    color: weapon.color,
+    shield: weapon.disc
+  });
   spawnMuzzleSparks(mesh.position, dir, 10, weapon.color);
 }
 
@@ -1558,7 +1935,7 @@ function runConsoleCommand(rawCommand) {
       makeScorch(enemy.group.position, 0xff4a18);
       scene.remove(enemy.group);
       enemiesById.delete(String(enemy.netId));
-      state.kills += 1;
+      recordEnemyKill(enemy);
     });
     logConsole("all monsters removed", "ok");
     return;
@@ -1623,7 +2000,19 @@ function selectWeapon(index, force = false) {
   weaponModels.forEach((model, modelIndex) => {
     model.visible = modelIndex === state.weaponIndex;
   });
+  syncMuzzleLightToWeapon();
   state.cameraKick = Math.max(state.cameraKick, 0.018);
+}
+
+function cycleWeapon(direction) {
+  const step = direction >= 0 ? 1 : -1;
+  for (let i = 1; i <= WEAPONS.length; i += 1) {
+    const nextIndex = THREE.MathUtils.euclideanModulo(state.weaponIndex + step * i, WEAPONS.length);
+    if (state.ownedWeapons[nextIndex]) {
+      selectWeapon(nextIndex);
+      return;
+    }
+  }
 }
 
 function restart() {
@@ -1634,11 +2023,14 @@ function restart() {
   state.ownedWeapons = WEAPONS.map(() => true);
   state.weaponIndex = 0;
   state.kills = 0;
+  state.nextBossKill = BOSS_KILL_INTERVAL;
+  state.bossIndex = 0;
   state.wave = 1;
   state.fireCooldown = 0;
   state.shieldCooldown = 0;
   state.verticalVelocity = 0;
   state.jumpOffset = 0;
+  state.floorY = 0;
   state.grounded = true;
   state.boostX = 0;
   state.boostZ = 0;
@@ -1647,7 +2039,7 @@ function restart() {
   nextEnemyId = 1;
   spawnQueue.length = 0;
   spawnDripTimer = 0;
-  controls.getObject().position.set(0, PLAYER_HEIGHT, 18);
+  placePlayerAtArenaSpawn();
   enemiesById.clear();
   enemies.splice(0).forEach((enemy) => scene.remove(enemy.group));
   clearRagdolls();
@@ -1663,15 +2055,45 @@ function restart() {
 
 function spawnWave() {
   if (!isEnemyHost()) return;
-  const waveCount = Math.min(6 + state.wave * 2, MAX_ENEMIES);
+  const waveCount = getWaveEnemyCount(state.wave);
   for (let i = 0; i < waveCount; i += 1) {
     queueEnemySpawn(pickEnemyType(), i);
   }
 }
 
+function getWaveEnemyCount(wave) {
+  return Math.min(
+    WAVE_BASE_ENEMIES + wave * WAVE_LINEAR_GROWTH + Math.floor(wave * wave / WAVE_BULK_GROWTH),
+    MAX_ENEMIES
+  );
+}
+
+function getActiveEnemyTarget(wave) {
+  return Math.min(12 + wave * 4 + Math.floor(wave * wave / 3), MAX_ENEMIES);
+}
+
 function queueEnemySpawn(type, index = 0) {
   if (!isEnemyHost()) return;
   spawnQueue.push({ type, index });
+}
+
+function recordEnemyKill(enemy) {
+  state.kills += 1;
+  maybeQueueBossSpawn();
+  if (enemy?.boss) {
+    state.ammo = Math.min(AMMO_MAX, state.ammo + 140);
+    state.armor = Math.min(100, state.armor + 18);
+  }
+}
+
+function maybeQueueBossSpawn() {
+  if (!isEnemyHost()) return;
+  while (state.kills >= state.nextBossKill) {
+    const bossType = BOSS_TYPES[state.bossIndex % BOSS_TYPES.length];
+    queueEnemySpawn(bossType, state.bossIndex);
+    state.bossIndex += 1;
+    state.nextBossKill += BOSS_KILL_INTERVAL;
+  }
 }
 
 function processSpawnQueue(delta) {
@@ -1703,9 +2125,12 @@ function pickEnemyType() {
 function spawnEnemy(type, index = 0) {
   const angle = gameRandom() * Math.PI * 2 + index * 0.35;
   const radius = 26 + gameRandom() * 11;
+  const x = Math.sin(angle) * radius;
+  const z = Math.cos(angle) * radius;
+  const floorY = getArenaFloorHeight(x, z);
   const enemy = createEnemy(type);
   enemy.netId = `${network.id ?? "local"}-${nextEnemyId++}`;
-  enemy.group.position.set(Math.sin(angle) * radius, -1.35, Math.cos(angle) * radius);
+  enemy.group.position.set(x, floorY - 1.35, z);
   enemy.lastPosition.copy(enemy.group.position);
   enemy.group.scale.setScalar(0.62);
   enemy.group.rotation.y = angle + Math.PI;
@@ -1813,6 +2238,70 @@ function getEnemyStats(type) {
       ranged: false,
       weaponLength: 0.9,
       glow: 0x84ff5c
+    },
+    dreadlord: {
+      boss: true,
+      scale: 1.58,
+      width: 1.32,
+      bodyMat: materials.flesh,
+      trimMat: materials.gold,
+      health: 820,
+      healthPerWave: 42,
+      speed: 1.55,
+      damage: 34,
+      attackRange: 2.75,
+      ranged: false,
+      weaponLength: 2.55,
+      glow: 0xff3218,
+      hitRadius: 2.45
+    },
+    goremaw: {
+      boss: true,
+      scale: 1.38,
+      width: 1.55,
+      bodyMat: materials.bone,
+      trimMat: materials.lava,
+      health: 640,
+      healthPerWave: 34,
+      speed: 2.65,
+      damage: 26,
+      attackRange: 2.25,
+      ranged: false,
+      weaponLength: 2.2,
+      glow: 0xff6a1f,
+      hitRadius: 2.1
+    },
+    voidseer: {
+      boss: true,
+      scale: 1.32,
+      width: 1.18,
+      bodyMat: materials.wraith,
+      trimMat: materials.void,
+      health: 560,
+      healthPerWave: 32,
+      speed: 2.05,
+      damage: 23,
+      attackRange: 13.5,
+      ranged: true,
+      weaponLength: 2.35,
+      glow: 0xb48cff,
+      hitRadius: 1.95
+    },
+    ironwarden: {
+      boss: true,
+      scale: 1.48,
+      width: 1.28,
+      bodyMat: materials.metal,
+      trimMat: materials.rune,
+      health: 760,
+      healthPerWave: 38,
+      speed: 1.75,
+      damage: 28,
+      attackRange: 12.0,
+      ranged: true,
+      weaponLength: 2.7,
+      glow: 0x5fffe0,
+      hitRadius: 2.25
     }
   };
   return stats[type] ?? stats.raider;
@@ -1923,6 +2412,43 @@ function createEnemy(type) {
     }
   }
 
+  if (stats.boss) {
+    const crown = new THREE.Mesh(new THREE.TorusGeometry(0.62 * scale, 0.055 * scale, 6, 24), trimMat);
+    crown.position.set(0, 3.34 * scale, 0);
+    crown.rotation.x = Math.PI / 2;
+    crown.castShadow = true;
+    group.add(crown);
+
+    const chestCore = new THREE.Mesh(new THREE.OctahedronGeometry(0.24 * scale, 0), materials.rune);
+    chestCore.position.set(0, 2.08 * scale, 0.54 * scale);
+    group.add(chestCore);
+
+    for (let s = -1; s <= 1; s += 2) {
+      const pauldron = new THREE.Mesh(new THREE.DodecahedronGeometry(0.42 * scale, 0), trimMat);
+      pauldron.position.set(s * 0.98 * scale * stats.width, 2.24 * scale, -0.02 * scale);
+      pauldron.scale.set(1.35, 0.72, 1.08);
+      pauldron.castShadow = true;
+      group.add(pauldron);
+
+      const tusk = new THREE.Mesh(new THREE.ConeGeometry(0.16 * scale, 0.9 * scale, 5), trimMat);
+      tusk.position.set(s * 0.44 * scale, 2.72 * scale, 0.46 * scale);
+      tusk.rotation.x = Math.PI / 2;
+      tusk.rotation.z = -s * 0.42;
+      tusk.castShadow = true;
+      group.add(tusk);
+    }
+
+    const ringCount = type === "voidseer" ? 3 : 2;
+    for (let i = 0; i < ringCount; i += 1) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry((0.86 + i * 0.22) * scale, 0.025 * scale, 6, 28), materials.rune);
+      ring.position.set(0, (1.55 + i * 0.32) * scale, -0.52 * scale);
+      ring.rotation.x = Math.PI / 2;
+      ring.rotation.z = i * 0.7;
+      group.add(ring);
+      limbs.wings.push({ mesh: ring, side: i % 2 ? 1 : -1, baseRotZ: ring.rotation.z, baseRotX: ring.rotation.x });
+    }
+  }
+
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(1.35 * scale, 24), materials.shadow);
   shadow.rotation.x = -Math.PI / 2;
   shadow.position.y = 0.025;
@@ -1932,9 +2458,12 @@ function createEnemy(type) {
   glow.position.y = 2.2 * scale;
   group.add(glow);
 
+  const skeleton = createEnemySkeleton(group, { type, scale, stats, limbs, blade });
+
   return {
     type,
     group,
+    skeleton,
     body,
     chest,
     head,
@@ -1947,6 +2476,8 @@ function createEnemy(type) {
     damage: stats.damage,
     attackRange: stats.attackRange,
     ranged: stats.ranged,
+    boss: Boolean(stats.boss),
+    hitRadius: stats.hitRadius ?? (stats.boss ? 2.1 : 1.1),
     boltColor: stats.glow,
     spawnProgress: 0,
     attackTimer: 0.9 + gameRandom() * 1.1,
@@ -1957,6 +2488,116 @@ function createEnemy(type) {
   };
 }
 
+function createEnemySkeleton(group, { type, scale, stats, limbs, blade }) {
+  const root = new THREE.Bone();
+  root.name = `${type}-root`;
+  root.position.set(0, 0, 0);
+  group.add(root);
+
+  const hips = makeBone("hips", 0, 0.88 * scale, 0);
+  const spine = makeBone("spine", 0, 0.7 * scale, 0);
+  const chest = makeBone("chest", 0, 0.44 * scale, 0.02 * scale);
+  const neck = makeBone("neck", 0, 0.42 * scale, 0);
+  const head = makeBone("head", 0, 0.26 * scale, 0);
+  root.add(hips);
+  hips.add(spine);
+  spine.add(chest);
+  chest.add(neck);
+  neck.add(head);
+
+  const skeleton = {
+    root,
+    hips,
+    spine,
+    chest,
+    neck,
+    head,
+    arms: [],
+    legs: [],
+    feet: [],
+    wings: []
+  };
+
+  for (const arm of limbs.arms) {
+    const shoulder = makeBone(`shoulder.${arm.side > 0 ? "R" : "L"}`, arm.side * 0.76 * scale * stats.width, 0.08 * scale, 0);
+    const elbow = makeBone(`elbow.${arm.side > 0 ? "R" : "L"}`, arm.side * 0.04 * scale, -0.52 * scale, 0.04 * scale);
+    chest.add(shoulder);
+    shoulder.add(elbow);
+    bindMeshToBone(group, shoulder, arm.mesh);
+    arm.bone = shoulder;
+    arm.childBone = elbow;
+    arm.baseBoneY = shoulder.position.y;
+    arm.baseBoneZ = shoulder.position.z;
+    arm.baseBoneRotX = shoulder.rotation.x;
+    arm.baseBoneRotZ = shoulder.rotation.z;
+    skeleton.arms.push(shoulder);
+  }
+
+  const rightArm = limbs.arms.find((arm) => arm.side > 0);
+  if (blade && rightArm?.bone) {
+    bindMeshToBone(group, rightArm.bone, blade);
+  }
+
+  for (const leg of limbs.legs) {
+    const hip = makeBone(`hip.${leg.side > 0 ? "R" : "L"}`, leg.side * 0.26 * scale, -0.04 * scale, 0);
+    const knee = makeBone(`knee.${leg.side > 0 ? "R" : "L"}`, leg.side * 0.02 * scale, -0.5 * scale, 0.02 * scale);
+    hips.add(hip);
+    hip.add(knee);
+    bindMeshToBone(group, hip, leg.mesh);
+    leg.bone = hip;
+    leg.childBone = knee;
+    leg.baseBoneY = hip.position.y;
+    leg.baseBoneZ = hip.position.z;
+    leg.baseBoneRotX = hip.rotation.x;
+    leg.baseBoneRotZ = hip.rotation.z;
+    skeleton.legs.push(hip);
+  }
+
+  for (const foot of limbs.feet) {
+    const leg = limbs.legs.find((candidate) => candidate.side === foot.side);
+    const parent = leg?.childBone ?? hips;
+    const footBone = makeBone(`foot.${foot.side > 0 ? "R" : "L"}`, foot.side * 0.02 * scale, -0.38 * scale, 0.18 * scale);
+    parent.add(footBone);
+    bindMeshToBone(group, footBone, foot.mesh);
+    foot.bone = footBone;
+    foot.baseBoneY = footBone.position.y;
+    foot.baseBoneZ = footBone.position.z;
+    foot.baseBoneRotX = footBone.rotation.x;
+    skeleton.feet.push(footBone);
+  }
+
+  for (const wing of limbs.wings) {
+    const wingBone = makeBone(`wing.${wing.side > 0 ? "R" : "L"}`, wing.side * 0.72 * scale, -0.28 * scale, -0.44 * scale);
+    chest.add(wingBone);
+    bindMeshToBone(group, wingBone, wing.mesh);
+    wing.bone = wingBone;
+    wing.baseBoneRotX = wingBone.rotation.x;
+    wing.baseBoneRotZ = wingBone.rotation.z;
+    skeleton.wings.push(wingBone);
+  }
+
+  skeleton.bones = [];
+  root.traverse((node) => {
+    if (node.isBone) skeleton.bones.push(node);
+  });
+  skeleton.threeSkeleton = new THREE.Skeleton(skeleton.bones);
+
+  return skeleton;
+}
+
+function makeBone(name, x, y, z) {
+  const bone = new THREE.Bone();
+  bone.name = name;
+  bone.position.set(x, y, z);
+  return bone;
+}
+
+function bindMeshToBone(root, bone, mesh) {
+  root.updateMatrixWorld(true);
+  mesh.updateMatrixWorld(true);
+  bone.attach(mesh);
+}
+
 function fire() {
   const weapon = WEAPONS[state.weaponIndex];
   if (!state.started || !state.alive || state.fireCooldown > 0 || state.ammo < weapon.cost) return;
@@ -1964,24 +2605,30 @@ function fire() {
   state.fireCooldown = state.noCooldown ? 0.02 : weapon.cooldown;
   state.cameraKick = weapon.cooldown > 0.7 ? 0.075 : 0.044;
   state.shake = Math.max(state.shake, weapon.blastRadius ? 0.06 : 0.035);
+  syncMuzzleLightToWeapon();
   muzzleLight.intensity = 4.5;
 
   camera.getWorldDirection(forward);
   camera.getWorldPosition(aimPoint);
+  aimPoint.addScaledVector(forward, 120);
+  const networkOrigin = getWeaponMuzzleWorldPosition(0).clone();
+  const networkDir = aimPoint.clone().sub(networkOrigin).normalize();
   if (network.roomId) {
     sendNetworkMessage({
       type: "fire",
       weaponIndex: state.weaponIndex,
-      x: aimPoint.x,
-      y: aimPoint.y,
-      z: aimPoint.z,
-      dx: forward.x,
-      dy: forward.y,
-      dz: forward.z
+      muzzleOrigin: true,
+      x: networkOrigin.x,
+      y: networkOrigin.y,
+      z: networkOrigin.z,
+      dx: networkDir.x,
+      dy: networkDir.y,
+      dz: networkDir.z
     });
   }
   for (let i = 0; i < weapon.shots; i += 1) {
-    const shotDir = forward.clone();
+    const shotOrigin = getWeaponMuzzleWorldPosition(i);
+    const shotDir = aimPoint.clone().sub(shotOrigin).normalize();
     const spread = weapon.spread ?? 0;
     shotDir.x += (Math.random() - 0.5) * spread;
     shotDir.y += (Math.random() - 0.5) * spread * 0.7;
@@ -1993,7 +2640,7 @@ function fire() {
     const projectile = weapon.disc
       ? new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 6), material)
       : new THREE.Mesh(geometries.projectile, material);
-    projectile.position.copy(aimPoint).addScaledVector(shotDir, 1.2);
+    projectile.position.copy(shotOrigin);
     projectile.scale.setScalar(weapon.size);
     if (weapon.disc) projectile.rotation.x = Math.PI / 2;
     scene.add(projectile);
@@ -2006,11 +2653,12 @@ function fire() {
       blastRadius: weapon.blastRadius ?? 0,
       gravity: weapon.gravity ?? 0,
       color: weapon.color,
+      weaponIndex: state.weaponIndex,
       shield: weapon.disc
     });
   }
 
-  spawnMuzzleSparks(aimPoint.clone().addScaledVector(forward, 1.25), forward, weapon.shots > 1 ? 24 : 12, weapon.color);
+  spawnMuzzleSparks(networkOrigin, networkDir, weapon.shots > 1 ? 24 : 12, weapon.color);
 }
 
 function throwShield() {
@@ -2039,6 +2687,8 @@ function throwShield() {
     ttl: 1.05,
     damage: 70,
     pierce: 3,
+    color: 0xf3d193,
+    weaponIndex: 5,
     shield: true
   });
 }
@@ -2055,7 +2705,7 @@ function update(delta) {
   updateInput();
   if (state.started && state.alive) {
     updatePlayer(delta);
-    if (state.touchFireHeld) fire();
+    if (state.touchFireHeld || state.mouseFireHeld) fire();
   }
   updateEnemies(delta);
   updateProjectiles(delta);
@@ -2092,8 +2742,8 @@ function updateTimers(delta) {
     state.nextWaveAt = 0;
   }
 
-  if (state.spawnTimer <= 0 && spawnQueue.length === 0 && enemies.length < Math.min(4 + state.wave, MAX_ENEMIES) && state.wave > 2) {
-    state.spawnTimer = 4.6 - Math.min(state.wave * 0.15, 1.6);
+  if (state.spawnTimer <= 0 && spawnQueue.length === 0 && enemies.length < getActiveEnemyTarget(state.wave) && state.wave > 2) {
+    state.spawnTimer = 3.2 - Math.min(state.wave * 0.12, 1.45);
     queueEnemySpawn(pickEnemyType());
   }
 }
@@ -2105,7 +2755,7 @@ function updateInput() {
   if (keys.has("KeyS") || keys.has("ArrowDown")) input.z += 1;
   if (keys.has("KeyA") || keys.has("ArrowLeft")) input.x -= 1;
   if (keys.has("KeyD") || keys.has("ArrowRight")) input.x += 1;
-  input.sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  input.walk = keys.has("ShiftLeft") || keys.has("ShiftRight");
 
   input.x += input.stickX;
   input.z += input.stickY;
@@ -2118,15 +2768,13 @@ function updateInput() {
 
 function updatePlayer(delta) {
   const object = controls.getObject();
-  state.verticalVelocity -= 22 * delta;
-  state.jumpOffset += state.verticalVelocity * delta;
-  if (state.jumpOffset <= 0) {
-    if (!state.grounded && state.verticalVelocity < -4) {
-      state.shake = Math.max(state.shake, 0.05);
-    }
-    state.jumpOffset = 0;
-    state.verticalVelocity = 0;
-    state.grounded = true;
+  const previousX = object.position.x;
+  const previousZ = object.position.z;
+  const previousFloorY = state.floorY;
+  let airborneWorldY = object.position.y;
+  if (!state.grounded) {
+    state.verticalVelocity -= 22 * delta;
+    airborneWorldY += state.verticalVelocity * delta;
   }
 
   camera.getWorldDirection(flatForward);
@@ -2134,7 +2782,7 @@ function updatePlayer(delta) {
   flatForward.normalize();
   right.crossVectors(flatForward, worldUp).normalize();
 
-  const speed = input.sprint ? 10.2 : 7.2;
+  const speed = input.walk ? 7.2 : 10.2;
   tmpVec.set(0, 0, 0)
     .addScaledVector(flatForward, -input.z)
     .addScaledVector(right, input.x)
@@ -2145,20 +2793,35 @@ function updatePlayer(delta) {
   state.boostX = THREE.MathUtils.damp(state.boostX, 0, 2.8, delta);
   state.boostZ = THREE.MathUtils.damp(state.boostZ, 0, 2.8, delta);
 
+  let surface = getArenaSurface(object.position.x, object.position.z);
+  if (state.grounded && surface.kind === "platform" && surface.height - previousFloorY > 0.9) {
+    object.position.x = previousX;
+    object.position.z = previousZ;
+    surface = getArenaSurface(object.position.x, object.position.z);
+  }
+
+  if (state.grounded && previousFloorY - surface.height > 0.45) {
+    state.grounded = false;
+    state.jumpOffset = previousFloorY - surface.height;
+    state.verticalVelocity = Math.min(state.verticalVelocity, -0.8);
+    airborneWorldY = PLAYER_HEIGHT + previousFloorY;
+  }
+
   for (const pad of jumpPads) {
     pad.cooldown = Math.max(0, pad.cooldown - delta);
     const padDist = Math.hypot(object.position.x - pad.x, object.position.z - pad.z);
-    if (padDist < pad.radius && state.grounded && pad.cooldown <= 0) {
+    if (padDist < pad.radius && Math.abs(surface.height - pad.y) < 0.9 && state.grounded && pad.cooldown <= 0) {
       const boostDir = new THREE.Vector3(Math.sin(pad.yaw), 0, Math.cos(pad.yaw));
       object.position.addScaledVector(boostDir, 1.15);
-      state.boostX = boostDir.x * 17;
-      state.boostZ = boostDir.z * 17;
-      state.verticalVelocity = 13.8;
+      state.boostX = boostDir.x * pad.power;
+      state.boostZ = boostDir.z * pad.power;
+      state.verticalVelocity = pad.lift;
       state.jumpOffset = 0.18;
       state.grounded = false;
+      airborneWorldY = PLAYER_HEIGHT + surface.height + state.jumpOffset;
       state.shake = Math.max(state.shake, 0.085);
       pad.cooldown = 0.85;
-      spawnMuzzleSparks(new THREE.Vector3(pad.x, 0.7, pad.z), worldUp, 30, 0x35f6d0);
+      spawnMuzzleSparks(new THREE.Vector3(pad.x, pad.y + 0.7, pad.z), worldUp, 30, 0x35f6d0);
     }
   }
 
@@ -2167,7 +2830,20 @@ function updatePlayer(delta) {
     object.position.x = (object.position.x / dist) * (ARENA_RADIUS - PLAYER_RADIUS);
     object.position.z = (object.position.z / dist) * (ARENA_RADIUS - PLAYER_RADIUS);
   }
-  object.position.y = PLAYER_HEIGHT + state.jumpOffset;
+  surface = getArenaSurface(object.position.x, object.position.z);
+  if (!state.grounded) {
+    state.jumpOffset = airborneWorldY - PLAYER_HEIGHT - surface.height;
+  }
+  if (state.jumpOffset <= 0) {
+    if (!state.grounded && state.verticalVelocity < -4) {
+      state.shake = Math.max(state.shake, 0.05);
+    }
+    state.jumpOffset = 0;
+    state.verticalVelocity = 0;
+    state.grounded = true;
+  }
+  state.floorY = surface.height;
+  object.position.y = PLAYER_HEIGHT + state.floorY + state.jumpOffset;
 
   const hazardDist = Math.hypot(object.position.x, object.position.z);
   if (hazardDist > ARENA_RADIUS - 2.2 && state.invulnerable <= 0) {
@@ -2203,37 +2879,54 @@ function animateEnemyWalk(enemy, delta, moveSpeed, attacking) {
   enemy.body.rotation.z = THREE.MathUtils.damp(enemy.body.rotation.z, sway * 0.08, 14, delta);
   enemy.head.position.y = THREE.MathUtils.damp(enemy.head.position.y, enemy.headBaseY + bounce * 0.055, 15, delta);
 
+  if (enemy.skeleton) {
+    enemy.skeleton.hips.rotation.z = THREE.MathUtils.damp(enemy.skeleton.hips.rotation.z, -sway * 0.035, 12, delta);
+    enemy.skeleton.spine.rotation.x = THREE.MathUtils.damp(enemy.skeleton.spine.rotation.x, Math.sin(phase * 0.7) * amount * 0.045, 12, delta);
+    enemy.skeleton.chest.rotation.z = THREE.MathUtils.damp(enemy.skeleton.chest.rotation.z, sway * 0.055, 12, delta);
+    enemy.skeleton.neck.rotation.y = THREE.MathUtils.damp(enemy.skeleton.neck.rotation.y, -sway * 0.06, 12, delta);
+  }
+
   for (const leg of enemy.limbs.legs) {
     const sidePhase = phase + (leg.side > 0 ? 0 : Math.PI);
     const cycle = Math.sin(sidePhase);
     const lift = Math.max(0, -Math.cos(sidePhase)) * amount;
-    leg.mesh.rotation.x = THREE.MathUtils.damp(leg.mesh.rotation.x, cycle * amount * 0.72, 18, delta);
-    leg.mesh.rotation.z = THREE.MathUtils.damp(leg.mesh.rotation.z, leg.baseRotZ - leg.side * amount * 0.08, 16, delta);
-    leg.mesh.position.y = THREE.MathUtils.damp(leg.mesh.position.y, leg.baseY + lift * 0.14, 18, delta);
-    leg.mesh.position.z = THREE.MathUtils.damp(leg.mesh.position.z, leg.baseZ - cycle * amount * 0.12, 18, delta);
+    const joint = leg.bone ?? leg.mesh;
+    joint.rotation.x = THREE.MathUtils.damp(joint.rotation.x, (leg.baseBoneRotX ?? 0) + cycle * amount * 0.72, 18, delta);
+    joint.rotation.z = THREE.MathUtils.damp(joint.rotation.z, (leg.baseBoneRotZ ?? leg.baseRotZ) - leg.side * amount * 0.08, 16, delta);
+    joint.position.y = THREE.MathUtils.damp(joint.position.y, (leg.baseBoneY ?? leg.baseY) + lift * 0.14, 18, delta);
+    joint.position.z = THREE.MathUtils.damp(joint.position.z, (leg.baseBoneZ ?? leg.baseZ) - cycle * amount * 0.12, 18, delta);
+    if (leg.childBone) {
+      leg.childBone.rotation.x = THREE.MathUtils.damp(leg.childBone.rotation.x, Math.max(0, -cycle) * amount * 0.32, 18, delta);
+    }
   }
 
   for (const foot of enemy.limbs.feet) {
     const sidePhase = phase + (foot.side > 0 ? 0 : Math.PI);
     const cycle = Math.sin(sidePhase);
     const lift = Math.max(0, -Math.cos(sidePhase)) * amount;
-    foot.mesh.rotation.x = THREE.MathUtils.damp(foot.mesh.rotation.x, -cycle * amount * 0.45, 18, delta);
-    foot.mesh.position.y = THREE.MathUtils.damp(foot.mesh.position.y, foot.baseY + lift * 0.1, 18, delta);
-    foot.mesh.position.z = THREE.MathUtils.damp(foot.mesh.position.z, foot.baseZ - cycle * amount * 0.18, 18, delta);
+    const joint = foot.bone ?? foot.mesh;
+    joint.rotation.x = THREE.MathUtils.damp(joint.rotation.x, (foot.baseBoneRotX ?? 0) - cycle * amount * 0.45, 18, delta);
+    joint.position.y = THREE.MathUtils.damp(joint.position.y, (foot.baseBoneY ?? foot.baseY) + lift * 0.1, 18, delta);
+    joint.position.z = THREE.MathUtils.damp(joint.position.z, (foot.baseBoneZ ?? foot.baseZ) - cycle * amount * 0.18, 18, delta);
   }
 
   for (const arm of enemy.limbs.arms) {
     const cycle = Math.sin(phase + (arm.side > 0 ? Math.PI : 0));
     const attackReach = attacking ? -0.28 : 0;
-    arm.mesh.rotation.x = THREE.MathUtils.damp(arm.mesh.rotation.x, cycle * amount * 0.62 + attackReach, 16, delta);
-    arm.mesh.rotation.z = THREE.MathUtils.damp(arm.mesh.rotation.z, arm.baseRotZ + arm.side * amount * 0.12, 16, delta);
-    arm.mesh.position.y = THREE.MathUtils.damp(arm.mesh.position.y, arm.baseY + bounce * 0.045, 16, delta);
-    arm.mesh.position.z = THREE.MathUtils.damp(arm.mesh.position.z, arm.baseZ - Math.abs(cycle) * amount * 0.08, 16, delta);
+    const joint = arm.bone ?? arm.mesh;
+    joint.rotation.x = THREE.MathUtils.damp(joint.rotation.x, (arm.baseBoneRotX ?? 0) + cycle * amount * 0.62 + attackReach, 16, delta);
+    joint.rotation.z = THREE.MathUtils.damp(joint.rotation.z, (arm.baseBoneRotZ ?? arm.baseRotZ) + arm.side * amount * 0.12, 16, delta);
+    joint.position.y = THREE.MathUtils.damp(joint.position.y, (arm.baseBoneY ?? arm.baseY) + bounce * 0.045, 16, delta);
+    joint.position.z = THREE.MathUtils.damp(joint.position.z, (arm.baseBoneZ ?? arm.baseZ) - Math.abs(cycle) * amount * 0.08, 16, delta);
+    if (arm.childBone) {
+      arm.childBone.rotation.x = THREE.MathUtils.damp(arm.childBone.rotation.x, Math.max(0, cycle) * amount * 0.22 + attackReach * 0.35, 16, delta);
+    }
   }
 
   for (const wing of enemy.limbs.wings) {
-    wing.mesh.rotation.z = THREE.MathUtils.damp(wing.mesh.rotation.z, wing.baseRotZ + Math.sin(phase * 1.4) * amount * 0.16, 10, delta);
-    wing.mesh.rotation.x = THREE.MathUtils.damp(wing.mesh.rotation.x, wing.baseRotX - Math.abs(Math.sin(phase)) * amount * 0.1, 10, delta);
+    const joint = wing.bone ?? wing.mesh;
+    joint.rotation.z = THREE.MathUtils.damp(joint.rotation.z, (wing.baseBoneRotZ ?? wing.baseRotZ) + Math.sin(phase * 1.4) * amount * 0.16, 10, delta);
+    joint.rotation.x = THREE.MathUtils.damp(joint.rotation.x, (wing.baseBoneRotX ?? wing.baseRotX) - Math.abs(Math.sin(phase)) * amount * 0.1, 10, delta);
   }
 
   if (enemy.blade) {
@@ -2260,17 +2953,18 @@ function updateEnemies(delta) {
     const dirZ = toPlayer.z / distance;
 
     enemy.group.rotation.y = Math.atan2(dirX, dirZ);
+    const floorY = getArenaFloorHeight(pos.x, pos.z);
     if (enemy.spawnProgress < 1) {
       enemy.spawnProgress = Math.min(1, enemy.spawnProgress + delta / ENEMY_EMERGE_TIME);
       const emerge = 1 - Math.pow(1 - enemy.spawnProgress, 3);
-      enemy.group.position.y = THREE.MathUtils.lerp(-1.35, 0.08, emerge);
+      enemy.group.position.y = THREE.MathUtils.lerp(floorY - 1.35, floorY + 0.08, emerge);
       enemy.group.scale.setScalar(THREE.MathUtils.lerp(0.62, 1, emerge));
       animateEnemyWalk(enemy, delta, 0.25, false);
       enemy.lastPosition.copy(pos);
       continue;
     }
 
-    enemy.group.position.y = 0.08;
+    enemy.group.position.y = floorY + 0.08;
     enemy.group.scale.setScalar(1);
     let moveSpeed = 0;
 
@@ -2280,19 +2974,20 @@ function updateEnemies(delta) {
       pos.z += dirZ * stride;
       moveSpeed = stride / Math.max(delta, 0.001);
     }
+    enemy.group.position.y = getArenaFloorHeight(pos.x, pos.z) + 0.08;
 
     enemy.attackTimer -= delta;
     if (distance <= enemy.attackRange && enemy.attackTimer <= 0 && state.alive) {
       if (enemy.ranged) {
         shootEnemyBolt(enemy, dirX, dirZ);
-        enemy.attackTimer = enemy.type === "sentinel" ? 1.55 : 1.05 + Math.random() * 0.45;
+        enemy.attackTimer = enemy.boss ? 1.35 + Math.random() * 0.35 : enemy.type === "sentinel" ? 1.55 : 1.05 + Math.random() * 0.45;
       } else {
         damagePlayer(enemy.damage);
-        enemy.attackTimer = enemy.type === "brute" ? 1.0 : enemy.type === "crawler" ? 0.46 : 0.72;
+        enemy.attackTimer = enemy.boss ? 1.08 : enemy.type === "brute" ? 1.0 : enemy.type === "crawler" ? 0.46 : 0.72;
       }
     }
 
-    if (distance < PLAYER_RADIUS + ENEMY_HIT_RADIUS && state.invulnerable <= 0) {
+    if (distance < PLAYER_RADIUS + (enemy.hitRadius ?? ENEMY_HIT_RADIUS) && state.invulnerable <= 0) {
       damagePlayer(Math.ceil(enemy.damage * 0.5));
     }
     animateEnemyWalk(enemy, delta, moveSpeed, distance <= enemy.attackRange);
@@ -2300,10 +2995,144 @@ function updateEnemies(delta) {
   }
 }
 
+function getProjectileRadius(shot) {
+  if (shot.shield) return 0.48;
+  return 0.16 * Math.max(shot.mesh?.scale?.x ?? 1, 0.8);
+}
+
+function getProjectileWorldImpact(shot, from, to) {
+  const radius = getProjectileRadius(shot);
+  let bestT = Infinity;
+  let bestKind = "";
+  const floorY = getArenaFloorHeight(to.x, to.z) + 0.08 + radius * 0.28;
+
+  const useImpact = (kind, t, x, y, z, nx, ny, nz) => {
+    if (t < 0 || t > 1 || t >= bestT) return;
+    bestT = t;
+    bestKind = kind;
+    projectileImpactPos.set(x, y, z);
+    projectileImpactNormal.set(nx, ny, nz);
+    if (projectileImpactNormal.lengthSq() < 0.001) projectileImpactNormal.copy(worldUp);
+    projectileImpactNormal.normalize();
+  };
+
+  if (to.y - radius <= floorY) {
+    const denom = from.y - to.y;
+    const t = Math.abs(denom) > 0.0001 ? THREE.MathUtils.clamp((from.y - floorY - radius) / denom, 0, 1) : 1;
+    projectileImpactPos.lerpVectors(from, to, t);
+    useImpact("floor", t, projectileImpactPos.x, floorY, projectileImpactPos.z, 0, 1, 0);
+  }
+
+  const wallRadius = ARENA_RADIUS + 1.05 - radius;
+  const fromR = Math.hypot(from.x, from.z);
+  const toR = Math.hypot(to.x, to.z);
+  if (toR >= wallRadius && toR > fromR) {
+    const t = THREE.MathUtils.clamp((wallRadius - fromR) / Math.max(toR - fromR, 0.0001), 0, 1);
+    projectileImpactPos.lerpVectors(from, to, t);
+    const outward = Math.hypot(projectileImpactPos.x, projectileImpactPos.z) || 1;
+    useImpact(
+      "wall",
+      t,
+      (projectileImpactPos.x / outward) * wallRadius,
+      THREE.MathUtils.clamp(projectileImpactPos.y, 0.15, 6.9),
+      (projectileImpactPos.z / outward) * wallRadius,
+      -projectileImpactPos.x / outward,
+      0,
+      -projectileImpactPos.z / outward
+    );
+  }
+
+  const dx = to.x - from.x;
+  const dz = to.z - from.z;
+  const segmentLenSq = dx * dx + dz * dz;
+  for (const volume of projectileHitVolumes) {
+    const t = segmentLenSq > 0.0001
+      ? THREE.MathUtils.clamp(((volume.x - from.x) * dx + (volume.z - from.z) * dz) / segmentLenSq, 0, 1)
+      : 0;
+    const y = THREE.MathUtils.lerp(from.y, to.y, t);
+    if (y < volume.minY - radius || y > volume.maxY + radius) continue;
+    const x = THREE.MathUtils.lerp(from.x, to.x, t);
+    const z = THREE.MathUtils.lerp(from.z, to.z, t);
+    const hitDx = x - volume.x;
+    const hitDz = z - volume.z;
+    const dist = Math.hypot(hitDx, hitDz);
+    if (dist > volume.radius + radius) continue;
+    const nx = dist > 0.001 ? hitDx / dist : -shot.velocity.x;
+    const nz = dist > 0.001 ? hitDz / dist : -shot.velocity.z;
+    const normalLength = Math.hypot(nx, nz) || 1;
+    useImpact(
+      volume.kind,
+      t,
+      volume.x + (nx / normalLength) * (volume.radius + 0.02),
+      THREE.MathUtils.clamp(y, volume.minY + 0.04, volume.maxY),
+      volume.z + (nz / normalLength) * (volume.radius + 0.02),
+      nx / normalLength,
+      0,
+      nz / normalLength
+    );
+  }
+
+  return bestKind;
+}
+
+function getProjectileImpactStyle(shot) {
+  const styles = [
+    { color: 0x57ffd7, secondary: 0xffffff, sparks: 12, scale: 0.46, shake: 0.006 },
+    { color: 0xffc06b, secondary: 0xff5a1d, sparks: 20, scale: 0.72, shake: 0.01 },
+    { color: 0x84ff5c, secondary: 0xd8ffb0, sparks: 11, scale: 0.42, shake: 0.005 },
+    { color: 0xffef9a, secondary: 0x57ffd7, sparks: 30, scale: 0.98, shake: 0.018 },
+    { color: 0xff4a18, secondary: 0xffc06b, sparks: 42, scale: 1.2, shake: 0.08 },
+    { color: 0xf3d193, secondary: 0xffef9a, sparks: 24, scale: 0.86, shake: 0.012 },
+    { color: 0xb48cff, secondary: 0x57ffd7, sparks: 18, scale: 0.58, shake: 0.009 }
+  ];
+  return styles[shot.weaponIndex] ?? {
+    color: shot.color ?? 0xff5a1d,
+    secondary: 0xffc06b,
+    sparks: 16,
+    scale: 0.65,
+    shake: 0.01
+  };
+}
+
+function spawnProjectileBreakEffect(shot, position, normal, impactKind = "object") {
+  const style = getProjectileImpactStyle(shot);
+  const direction = normal.clone();
+  if (direction.lengthSq() < 0.001) direction.copy(shot.velocity).multiplyScalar(-1);
+  direction.normalize();
+  const sparkBoost = impactKind === "wall" ? 1.1 : impactKind === "floor" ? 0.9 : 1.25;
+  spawnMuzzleSparks(position, direction, Math.ceil(style.sparks * sparkBoost), style.color);
+  if (style.secondary) {
+    spawnMuzzleSparks(position, direction, Math.ceil(style.sparks * 0.28), style.secondary);
+  }
+  makeImpactScorch(position, direction, style.color, style.scale * (impactKind === "object" ? 0.78 : 1));
+  state.shake = Math.max(state.shake, style.shake);
+}
+
+function makeImpactScorch(position, normal, color, scale = 0.7) {
+  const material = new THREE.MeshBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  const mesh = new THREE.Mesh(geometries.scorch, material);
+  const decalNormal = normal.clone();
+  if (decalNormal.lengthSq() < 0.001) decalNormal.copy(worldUp);
+  decalNormal.normalize();
+  mesh.scale.set(scale * (0.75 + Math.random() * 0.45), scale * (0.45 + Math.random() * 0.38), 1);
+  mesh.quaternion.setFromUnitVectors(decalNormalTmp.set(0, 0, 1), decalNormal);
+  mesh.rotateZ(Math.random() * Math.PI);
+  mesh.position.copy(position).addScaledVector(decalNormal, 0.035);
+  scene.add(mesh);
+  decals.push({ mesh, ttl: 5.5 + Math.random() * 2.5 });
+}
+
 function updateProjectiles(delta) {
   const canDamageEnemies = isEnemyHost();
   for (let i = projectiles.length - 1; i >= 0; i -= 1) {
     const shot = projectiles[i];
+    projectilePrevPos.copy(shot.mesh.position);
     shot.ttl -= delta;
     if (shot.gravity) shot.velocity.y -= shot.gravity * delta;
     shot.mesh.position.addScaledVector(shot.velocity, delta);
@@ -2313,7 +3142,7 @@ function updateProjectiles(delta) {
     let hit = false;
     if (canDamageEnemies) for (let e = enemies.length - 1; e >= 0; e -= 1) {
       const enemy = enemies[e];
-      const radius = enemy.type === "brute" ? 1.7 : 1.1;
+      const radius = enemy.hitRadius ?? (enemy.type === "brute" ? 1.7 : 1.1);
       const dy = Math.abs(shot.mesh.position.y - (enemy.group.position.y + 1.55));
       const dist = shot.mesh.position.distanceTo(enemy.group.position);
       if (dist < radius + 0.65 && dy < 2.6) {
@@ -2336,10 +3165,25 @@ function updateProjectiles(delta) {
       }
     }
 
+    const impactKind = hit ? "" : getProjectileWorldImpact(shot, projectilePrevPos, shot.mesh.position);
+    if (impactKind) {
+      shot.mesh.position.copy(projectileImpactPos);
+      if (shot.blastRadius) {
+        if (impactKind !== "floor") {
+          makeImpactScorch(projectileImpactPos, projectileImpactNormal, shot.color ?? 0xff4a18, 1.25);
+        }
+        explodeProjectile(shot);
+      } else {
+        spawnProjectileBreakEffect(shot, projectileImpactPos, projectileImpactNormal, impactKind);
+      }
+      scene.remove(shot.mesh);
+      projectiles.splice(i, 1);
+      continue;
+    }
+
     const arenaDist = Math.hypot(shot.mesh.position.x, shot.mesh.position.z);
     if (shot.ttl <= 0 && shot.blastRadius) explodeProjectile(shot);
-    if (shot.ttl <= 0 || hit || arenaDist > ARENA_RADIUS + 4 || shot.mesh.position.y < 0.12) {
-      if (shot.mesh.position.y < 0.12 && shot.blastRadius) explodeProjectile(shot);
+    if (shot.ttl <= 0 || hit || arenaDist > ARENA_RADIUS + 4) {
       scene.remove(shot.mesh);
       projectiles.splice(i, 1);
     }
@@ -2347,6 +3191,7 @@ function updateProjectiles(delta) {
 
   for (let i = enemyBolts.length - 1; i >= 0; i -= 1) {
     const shot = enemyBolts[i];
+    projectilePrevPos.copy(shot.mesh.position);
     shot.ttl -= delta;
     shot.mesh.position.addScaledVector(shot.velocity, delta);
     shot.mesh.rotation.y += delta * 10;
@@ -2357,7 +3202,14 @@ function updateProjectiles(delta) {
       enemyBolts.splice(i, 1);
       continue;
     }
-    if (shot.ttl <= 0 || Math.hypot(shot.mesh.position.x, shot.mesh.position.z) > ARENA_RADIUS) {
+    const impactKind = getProjectileWorldImpact({ ...shot, weaponIndex: 4, color: 0xff4a18 }, projectilePrevPos, shot.mesh.position);
+    if (impactKind) {
+      spawnProjectileBreakEffect({ ...shot, weaponIndex: 4, color: 0xff4a18 }, projectileImpactPos, projectileImpactNormal, impactKind);
+      scene.remove(shot.mesh);
+      enemyBolts.splice(i, 1);
+      continue;
+    }
+    if (shot.ttl <= 0 || Math.hypot(shot.mesh.position.x, shot.mesh.position.z) > ARENA_RADIUS + 4) {
       scene.remove(shot.mesh);
       enemyBolts.splice(i, 1);
     }
@@ -2369,7 +3221,7 @@ function updatePickups(delta) {
   for (let i = pickups.length - 1; i >= 0; i -= 1) {
     const pickup = pickups[i];
     pickup.mesh.rotation.y += delta * 2.4;
-    pickup.mesh.position.y = 0.8 + Math.sin(clock.elapsedTime * 3 + pickup.phase) * 0.12;
+    pickup.mesh.position.y = pickup.baseY + Math.sin(clock.elapsedTime * 3 + pickup.phase) * 0.12;
     if (pickup.mesh.position.distanceTo(playerPos) < 2) {
       if (pickup.kind === "health") state.health = Math.min(100, state.health + 24);
       if (pickup.kind === "armor") state.armor = Math.min(100, state.armor + 22);
@@ -2431,7 +3283,9 @@ function updateEffects(delta) {
     const fade = Math.max(0, drop.life / drop.maxLife);
     drop.mesh.scale.setScalar(drop.size * (0.65 + fade * 0.35));
 
-    if (drop.mesh.position.y <= 0.08) {
+    const dropFloorY = getArenaFloorHeight(drop.mesh.position.x, drop.mesh.position.z) + 0.08;
+    if (drop.mesh.position.y <= dropFloorY) {
+      drop.mesh.position.y = dropFloorY;
       makeBloodSplat(drop.mesh.position, drop.color, drop.size * (2.2 + Math.random() * 1.7));
       releaseBloodDrop(drop.mesh);
       bloodDrops.splice(i, 1);
@@ -2454,8 +3308,9 @@ function updateEffects(delta) {
     part.mesh.rotation.z += part.spin.z * delta;
 
     const floorOffset = getRagdollFloorOffset(part);
-    if (part.mesh.position.y + floorOffset < 0.055) {
-      part.mesh.position.y = 0.055 - floorOffset;
+    const ragdollFloorY = getArenaFloorHeight(part.mesh.position.x, part.mesh.position.z) + 0.055;
+    if (part.mesh.position.y + floorOffset < ragdollFloorY) {
+      part.mesh.position.y = ragdollFloorY - floorOffset;
       if (Math.abs(part.velocity.y) > 1.2) {
         part.velocity.y = Math.abs(part.velocity.y) * 0.22;
         part.spin.multiplyScalar(0.58);
@@ -2598,7 +3453,7 @@ function die() {
 }
 
 function killEnemy(enemy, index) {
-  state.kills += 1;
+  recordEnemyKill(enemy);
   maybeDrop(enemy.group.position);
   makeScorch(enemy.group.position, enemy.type === "wraith" ? 0x20c8a4 : 0xff3218);
   spawnMuzzleSparks(enemy.group.position.clone().setY(1.6), worldUp, enemy.type === "brute" ? 44 : 28, enemy.type === "wraith" ? 0x5fffe0 : 0xff5a1d);
@@ -2704,10 +3559,11 @@ function maybeDrop(position) {
   const kind = kindRoll < 0.35 ? "health" : kindRoll < 0.65 ? "armor" : "ammo";
   const mat = kind === "health" ? materials.lava : kind === "armor" ? materials.gold : materials.rune;
   const mesh = new THREE.Mesh(geometries.pickup, mat);
-  mesh.position.copy(position).setY(0.8);
+  const floorY = getArenaFloorHeight(position.x, position.z);
+  mesh.position.copy(position).setY(floorY + 0.8);
   mesh.castShadow = true;
   scene.add(mesh);
-  pickups.push({ mesh, kind, phase: Math.random() * Math.PI * 2 });
+  pickups.push({ mesh, kind, baseY: floorY + 0.8, phase: Math.random() * Math.PI * 2 });
 }
 
 function dropWeapon(position, weaponIndex) {
@@ -2723,10 +3579,11 @@ function dropWeapon(position, weaponIndex) {
   ring.rotation.y = Math.PI / 2;
   ring.position.x = -0.34;
   group.add(core, barrel, ring);
-  group.position.copy(position).setY(0.95);
+  const floorY = getArenaFloorHeight(position.x, position.z);
+  group.position.copy(position).setY(floorY + 0.95);
   group.castShadow = true;
   scene.add(group);
-  pickups.push({ mesh: group, kind: "weapon", weaponIndex, phase: Math.random() * Math.PI * 2 });
+  pickups.push({ mesh: group, kind: "weapon", weaponIndex, baseY: floorY + 0.95, phase: Math.random() * Math.PI * 2 });
 }
 
 function makeScorch(position, color) {
@@ -2739,7 +3596,7 @@ function makeScorch(position, color) {
   const mesh = new THREE.Mesh(geometries.scorch, material);
   mesh.scale.setScalar(1.1 + Math.random() * 0.9);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.copy(position).setY(0.035);
+  mesh.position.copy(position).setY(getArenaFloorHeight(position.x, position.z) + 0.035);
   mesh.rotation.z = Math.random() * Math.PI;
   scene.add(mesh);
   decals.push({ mesh, ttl: 7 });
@@ -2763,7 +3620,7 @@ function makeBloodSplat(position, color, scale = 0.5) {
   mesh.scale.set(scale * (0.7 + Math.random() * 0.75), scale * (0.38 + Math.random() * 0.44), 1);
   mesh.rotation.x = -Math.PI / 2;
   mesh.rotation.z = Math.random() * Math.PI;
-  mesh.position.copy(position).setY(0.042 + Math.random() * 0.006);
+  mesh.position.copy(position).setY(getArenaFloorHeight(position.x, position.z) + 0.042 + Math.random() * 0.006);
   scene.add(mesh);
   decals.push({ mesh, ttl: 8.5 + Math.random() * 2.5 });
 }
