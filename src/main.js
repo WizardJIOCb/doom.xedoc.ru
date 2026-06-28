@@ -5223,7 +5223,7 @@ function updateWeapon(delta) {
   state.cameraKick = THREE.MathUtils.damp(state.cameraKick, 0, 22, delta);
   state.shake = Math.max(0, state.shake - delta * 0.75);
 
-  shieldMesh.visible = state.shieldCooldown <= 3.35 || !state.alive;
+  shieldMesh.visible = !state.started || !state.alive || state.shieldCooldown <= 0.001;
   shieldMesh.rotation.z += delta * (state.shieldCooldown > 0 ? 1.1 : 0.3);
 }
 
