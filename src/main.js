@@ -3370,10 +3370,6 @@ function createEnemy(type) {
   shadow.position.y = 0.025;
   group.add(shadow);
 
-  const glow = new THREE.PointLight(stats.glow, stats.ranged ? 0.58 : 0.38, 6, 2);
-  glow.position.y = 2.2 * scale;
-  group.add(glow);
-
   const skeleton = createEnemySkeleton(group, { type, scale, stats, limbs, blade });
 
   return {
